@@ -1,161 +1,354 @@
 
 ---
-# Restore remote access before touching controller Vaults
-
-- name: Select credentials capable of restoring authorized_keys
-  ansible.builtin.set_fact:
-    ansible_private_key: >-
-      {{ rotation_new_private_key if (rotation_old_key_revocation_started | default(false)) else rotation_old_private_key }}
-    ansible_private_key_passphrase: >-
-      {{ generated_ssh_key_passphrase if (rotation_old_key_revocation_started | default(false)) else rotation_old_key_passphrase }}
-    ansible_become_password: >-
-      {{ generated_sudo_password if (rotation_sudo_change_started | default(false)) else rotation_old_sudo_password }}
-  no_log: true
-
-- name: Reset connection for remote recovery
-  ansible.builtin.meta: reset_connection
-
-- name: Restore original authorized_keys with sudo fallback
-  block:
-    - name: Restore authorized_keys using expected sudo password
-      ansible.builtin.copy:
-        dest: "{{ rotation_authorized_keys_path }}"
-        content: "{{ rotation_authorized_keys_before }}"
-        owner: "{{ service_user.user_name }}"
-        group: "{{ service_user.primary_group | default(service_user.user_name) }}"
-        mode: '0600'
-      become: true
-      no_log: true
-
-  rescue:
-    - name: Switch to alternate sudo password for recovery
-      ansible.builtin.set_fact:
-        ansible_become_password: >-
-          {{ rotation_old_sudo_password if (rotation_sudo_change_started | default(false)) else generated_sudo_password }}
-      no_log: true
-
-    - name: Restore authorized_keys using alternate sudo password
-      ansible.builtin.copy:
-        dest: "{{ rotation_authorized_keys_path }}"
-        content: "{{ rotation_authorized_keys_before }}"
-        owner: "{{ service_user.user_name }}"
-        group: "{{ service_user.primary_group | default(service_user.user_name) }}"
-        mode: '0600'
-      become: true
-      no_log: true
-
-- name: Switch back to original private SSH key
-  ansible.builtin.set_fact:
-    ansible_private_key: "{{ rotation_old_private_key }}"
-    ansible_private_key_passphrase: "{{ rotation_old_key_passphrase }}"
-  no_log: true
-
-- name: Reset connection to original SSH key
-  ansible.builtin.meta: reset_connection
-
-- name: Restore previous sudo password if change was started
-  when: rotation_sudo_change_started | default(false)
-  block:
-    - name: Try sudo rollback with newly generated password
-      ansible.builtin.set_fact:
-        ansible_become_password: "{{ generated_sudo_password }}"
-      no_log: true
-
-    - name: Restore original Linux user password
-      ansible.builtin.user:
-        name: "{{ service_user.user_name }}"
-        password: >-
-          {{
-            rotation_old_sudo_password
-            | ansible.builtin.password_hash(
-                'sha512',
-                salt=rotation_old_sudo_salt,
-                rounds=100000
-              )
-          }}
-        update_password: always
-        password_lock: false
-      become: true
-      no_log: true
-
-  rescue:
-    - name: Retry sudo rollback with original password
-      ansible.builtin.set_fact:
-        ansible_become_password: "{{ rotation_old_sudo_password }}"
-      no_log: true
-
-    - name: Restore original Linux user password using old sudo credentials
-      ansible.builtin.user:
-        name: "{{ service_user.user_name }}"
-        password: >-
-          {{
-            rotation_old_sudo_password
-            | ansible.builtin.password_hash(
-                'sha512',
-                salt=rotation_old_sudo_salt,
-                rounds=100000
-              )
-          }}
-        update_password: always
-        password_lock: false
-      become: true
-      no_log: true
-
-- name: Set original sudo password for verification
-  ansible.builtin.set_fact:
-    ansible_become_password: "{{ rotation_old_sudo_password }}"
-  no_log: true
-
-- name: Reset SSH connection for original credentials test
-  ansible.builtin.meta: reset_connection
-
-- name: Wait for original SSH authentication
-  ansible.builtin.wait_for_connection:
-    connect_timeout: 5
-    sleep: 2
-    timeout: 40
+- name: Rotate server secrets
+  hosts: "{{ hostname }}"
+  serial: 1
+  any_errors_fatal: true
+  remote_user: ansible
   become: false
-  register: rotation_rollback_connection
-  ignore_errors: true
-  ignore_unreachable: true
+  become_method: sudo
+  become_user: root
+  become_exe: /usr/bin/sudo.ws
+  gather_facts: false
 
-- name: Assert original SSH connection is available
-  ansible.builtin.assert:
-    that:
-      - not (rotation_rollback_connection.failed | default(false))
-      - not (rotation_rollback_connection.unreachable | default(false))
-    fail_msg: >-
-      ROLLBACK FEHLGESCHLAGEN: alter SSH-Zugang nicht erreichbar.
+  vars_files:
+    - "{{ playbook_dir }}/../vars/dirs.yml"
+    - "{{ vaults_dir }}/master.vault"
 
-- name: Verify original SSH identity
-  ansible.builtin.command:
-    cmd: /usr/bin/id -un
-  register: rotation_rollback_ssh
-  changed_when: false
-  failed_when: >-
-    rotation_rollback_ssh.rc != 0 or
-    rotation_rollback_ssh.stdout | trim != service_user.user_name
+  vars:
+    rotation_confirm: false
+    rotation_max_attempts: 3
+    host_specs_file: "{{ vars_dir }}/host_vars/{{ inventory_hostname }}.yml"
+    rotation_backup_root: "{{ lookup('ansible.builtin.env', 'HOME') }}/.ansible/rotation-backups"
+    rotation_backup_dir: "{{ rotation_backup_root }}/{{ inventory_hostname }}"
+    rotation_global_lock_dir: "{{ rotation_backup_root }}/.vault-rotation.lock"
+    rotation_authorized_keys_path: "/home/{{ service_user.user_name }}/.ssh/authorized_keys"
 
-- name: Verify original sudo authentication
-  ansible.builtin.command:
-    cmd: /usr/bin/id -u
-  become: true
-  register: rotation_rollback_sudo
-  changed_when: false
-  failed_when: >-
-    rotation_rollback_sudo.rc != 0 or
-    rotation_rollback_sudo.stdout | trim != '0'
-  no_log: true
+    rotation_vaults:
+      - file: "{{ vaults_dir }}/ansible_sudo_passwords.vault"
+        id: ansible_sudo_passwords
+        password: "{{ master_vault.ansible_sudo_passwords_vault_password }}"
+        key: sudo_passwords
+        fact: sudo_passwords_vault
+        new_fact: generated_sudo_password
 
-- name: Read restored authorized_keys
-  ansible.builtin.slurp:
-    src: "{{ rotation_authorized_keys_path }}"
-  register: rotation_rollback_keys
-  no_log: true
+      - file: "{{ vaults_dir }}/ssh_keys_passphrases.vault"
+        id: ssh_keys_passphrases
+        password: "{{ master_vault.ssh_keys_passphrases_vault_password }}"
+        key: ssh_keys_passphrases
+        fact: key_passphrases_vault
+        new_fact: generated_ssh_key_passphrase
 
-- name: Verify authorized_keys restored byte-for-byte
-  ansible.builtin.assert:
-    that:
-      - (rotation_rollback_keys.content | b64decode) == rotation_authorized_keys_before
-    fail_msg: >-
-      ROLLBACK FEHLGESCHLAGEN: authorized_keys weicht vom Original ab.
+      - file: "{{ vaults_dir }}/ssh_keys_vaults_passwords.vault"
+        id: ssh_keys_vaults_passwords
+        password: "{{ master_vault.ssh_keys_vaults_passwords_vault_password }}"
+        key: vaults
+        fact: vault_passwords_vault
+        new_fact: generated_ssh_key_vault_password
+
+      - file: "{{ vaults_dir }}/sudo_passwords_salts.vault"
+        id: sudo_passwords_salts
+        password: "{{ master_vault.sudo_passwords_salts_vault_password }}"
+        key: salts
+        fact: sudo_passwords_salts_vault
+        new_fact: generated_sudo_password_salt
+
+    rotation_backup_files:
+      - source: "{{ vaults_dir }}/ansible_sudo_passwords.vault"
+        name: ansible_sudo_passwords.vault
+      - source: "{{ vaults_dir }}/ssh_keys_passphrases.vault"
+        name: ssh_keys_passphrases.vault
+      - source: "{{ vaults_dir }}/ssh_keys_vaults_passwords.vault"
+        name: ssh_keys_vaults_passwords.vault
+      - source: "{{ vaults_dir }}/sudo_passwords_salts.vault"
+        name: sudo_passwords_salts.vault
+      - source: "{{ vaults_dir }}/private_keys/{{ inventory_hostname }}.vault"
+        name: private_key.vault
+      - source: "{{ public_keys_dir }}/{{ inventory_hostname }}.pub"
+        name: public_key.pub
+
+  pre_tasks:
+    # ============================================================
+    # Validate and load current server state
+    # ============================================================
+
+    - name: Validate rotation request
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9._-]*(,[A-Za-z0-9][A-Za-z0-9._-]*)*$')
+          - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
+          - inventory_hostname not in ['.', '..']
+          - rotation_confirm | bool
+          - not ansible_check_mode
+        fail_msg: >-
+          Ungueltiges Rotationsziel oder fehlende Bestaetigung.
+          Bitte -e hostname=<host|host1,host2|all> -e rotation_confirm=true verwenden.
+
+    - name: Load host specifications
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/host_specs/load.yml"
+        apply:
+          become: false
+      vars:
+        host_specs_path: "{{ host_specs_file }}"
+        host_specs_expected_hostname: "{{ inventory_hostname }}"
+
+    - name: Require completed bootstrap and generated secrets
+      ansible.builtin.assert:
+        that:
+          - host_specs.bootstrap is defined
+          - host_specs.bootstrap is sameas true
+          - host_specs.secrets is defined
+          - host_specs.secrets is sameas true
+        fail_msg: >-
+          {{ inventory_hostname }} muss bereits gebootstrappt sein und
+          gueltige Secrets besitzen. Rotation wird verweigert.
+
+    - name: Load Ansible service user declaration
+      ansible.builtin.include_vars:
+        file: "{{ vars_dir }}/users/ansible.yml"
+        name: service_user
+
+    - name: Load current Vaults
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/vault/load.yml"
+        apply:
+          become: false
+      loop: "{{ rotation_vaults }}"
+      loop_control:
+        loop_var: rotation_vault
+        label: "{{ rotation_vault.file | basename }}"
+      vars:
+        vault_load_file: "{{ rotation_vault.file }}"
+        vault_load_id: "{{ rotation_vault.id }}"
+        vault_load_password: "{{ rotation_vault.password }}"
+        vault_load_key: "{{ rotation_vault.key }}"
+        vault_load_fact: "{{ rotation_vault.fact }}"
+      no_log: true
+
+    - name: Verify all current host secrets exist
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in sudo_passwords_vault
+          - inventory_hostname in key_passphrases_vault
+          - inventory_hostname in vault_passwords_vault
+          - inventory_hostname in sudo_passwords_salts_vault
+        quiet: true
+      no_log: true
+
+    - name: Configure existing Ansible service connection
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/connection/configure.yml"
+        apply:
+          become: false
+      vars:
+        connection_user: "{{ service_user.user_name }}"
+        connection_key_name: "{{ inventory_hostname }}"
+        connection_sudo_key: "{{ inventory_hostname }}"
+
+    - name: Save original credentials for all retry attempts
+      ansible.builtin.set_fact:
+        rotation_old_private_key: "{{ ansible_private_key }}"
+        rotation_old_key_passphrase: "{{ ansible_private_key_passphrase }}"
+        rotation_old_sudo_password: "{{ sudo_passwords_vault[inventory_hostname] }}"
+        rotation_old_sudo_salt: "{{ sudo_passwords_salts_vault[inventory_hostname] }}"
+        rotation_old_key_vault_password: "{{ vault_passwords_vault[inventory_hostname] }}"
+        rotation_old_public_key: >-
+          {{ lookup('ansible.builtin.file', public_keys_dir ~ '/' ~ inventory_hostname ~ '.pub') | trim }}
+      no_log: true
+
+    - name: Verify existing SSH authentication
+      ansible.builtin.command:
+        cmd: /usr/bin/id -un
+      register: rotation_initial_ssh
+      changed_when: false
+      failed_when: >-
+        rotation_initial_ssh.rc != 0 or
+        rotation_initial_ssh.stdout | trim != service_user.user_name
+
+    - name: Verify existing sudo authentication
+      ansible.builtin.command:
+        cmd: /usr/bin/id -u
+      become: true
+      register: rotation_initial_sudo
+      changed_when: false
+      failed_when: >-
+        rotation_initial_sudo.rc != 0 or
+        rotation_initial_sudo.stdout | trim != '0'
+      no_log: true
+
+    - name: Read original authorized_keys
+      ansible.builtin.slurp:
+        src: "{{ rotation_authorized_keys_path }}"
+      register: rotation_authorized_keys_result
+      no_log: true
+
+    - name: Save original authorized_keys content
+      ansible.builtin.set_fact:
+        rotation_authorized_keys_before: "{{ rotation_authorized_keys_result.content | b64decode }}"
+      no_log: true
+
+    - name: Verify original managed public key is authorized
+      ansible.builtin.assert:
+        that:
+          - rotation_old_public_key in rotation_authorized_keys_before.splitlines()
+        fail_msg: >-
+          Der bisherige verwaltete Public Key fehlt in authorized_keys.
+
+    # ============================================================
+    # Check recovery state before acquiring the global lock
+    # ============================================================
+
+    - name: Create local recovery root
+      ansible.builtin.file:
+        path: "{{ rotation_backup_root }}"
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+
+    - name: Check for unfinished rotation
+      ansible.builtin.stat:
+        path: "{{ rotation_backup_dir }}"
+      delegate_to: localhost
+      become: false
+      register: rotation_existing_recovery
+
+    - name: Refuse overwriting unfinished recovery data
+      ansible.builtin.assert:
+        that:
+          - not rotation_existing_recovery.stat.exists
+        fail_msg: >-
+          Recovery-Verzeichnis {{ rotation_backup_dir }} existiert bereits.
+          Zustand vor erneutem Start untersuchen.
+
+  tasks:
+    # ============================================================
+    # One exclusive transaction, up to three complete attempts
+    # ============================================================
+
+    - name: Rotate secrets with up to three verified attempts
+      block:
+        - name: Acquire global Vault writer lock
+          ansible.builtin.command:
+            argv:
+              - mkdir
+              - -m
+              - '0700'
+              - "{{ rotation_global_lock_dir }}"
+          delegate_to: localhost
+          become: false
+
+        - name: Remember exclusive lock acquisition
+          ansible.builtin.set_fact:
+            rotation_global_lock_acquired: true
+            rotation_lock_safe_to_release: true
+
+        - name: Reserve per-host recovery directory
+          ansible.builtin.command:
+            argv:
+              - mkdir
+              - -m
+              - '0700'
+              - "{{ rotation_backup_dir }}"
+          delegate_to: localhost
+          become: false
+
+        - name: Remember recovery directory
+          ansible.builtin.set_fact:
+            rotation_backup_created: true
+
+        # ========================================================
+        # Attempt 1
+        # ========================================================
+
+        - name: Run first rotation attempt
+          ansible.builtin.include_tasks:
+            file: "{{ tasks_dir }}/rotation/attempt.yml"
+          vars:
+            rotation_attempt_number: 1
+
+        # ========================================================
+        # Attempt 2, only if attempt 1 failed
+        # ========================================================
+
+        - name: Run second rotation attempt if needed
+          ansible.builtin.include_tasks:
+            file: "{{ tasks_dir }}/rotation/attempt.yml"
+          vars:
+            rotation_attempt_number: 2
+          when: not (rotation_successful | default(false) | bool)
+
+        # ========================================================
+        # Attempt 3, only if attempts 1 and 2 failed
+        # ========================================================
+
+        - name: Run third rotation attempt if needed
+          ansible.builtin.include_tasks:
+            file: "{{ tasks_dir }}/rotation/attempt.yml"
+          vars:
+            rotation_attempt_number: 3
+          when: not (rotation_successful | default(false) | bool)
+
+        # ========================================================
+        # Require success
+        # ========================================================
+
+        - name: Require successful rotation after all attempts
+          ansible.builtin.assert:
+            that:
+              - rotation_successful | default(false) | bool
+            fail_msg: >-
+              Rotation fuer {{ inventory_hostname }} nach
+              {{ rotation_max_attempts }} Versuchen nicht erfolgreich.
+              Der urspruengliche Zugriff wurde bei jedem Fehler
+              geprueft wiederhergestellt.
+
+      rescue:
+        - name: Report failed rotation or unsafe rollback
+          ansible.builtin.debug:
+            msg: >-
+              Rotation fuer {{ inventory_hostname }} abgebrochen.
+              {% if rotation_lock_safe_to_release | default(false) %}
+              Der letzte Rollback wurde verifiziert.
+              {% else %}
+              Der Rollback wurde NICHT vollstaendig verifiziert.
+              Recovery-Daten und globales Lock bleiben erhalten:
+              {{ rotation_backup_dir }}.
+              {% endif %}
+
+        - name: Fail rotation explicitly
+          ansible.builtin.fail:
+            msg: >-
+              Rotation fehlgeschlagen; es werden keine weiteren
+              Versuche gestartet. Bei unvollstaendigem Rollback
+              sind die Recovery-Dateien zu untersuchen.
+
+      always:
+        - name: Remove recovery files after verified success or rollback
+          ansible.builtin.file:
+            path: "{{ rotation_backup_dir }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when:
+            - rotation_backup_created | default(false)
+            - rotation_lock_safe_to_release | default(false)
+
+        - name: Release global Vault lock only in verified safe state
+          ansible.builtin.file:
+            path: "{{ rotation_global_lock_dir }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when:
+            - rotation_global_lock_acquired | default(false)
+            - rotation_lock_safe_to_release | default(false)
+
+    - name: Confirm successful secret rotation
+      ansible.builtin.debug:
+        msg: >-
+          Alle Secrets fuer {{ inventory_hostname }} wurden erfolgreich
+          rotiert und mit neuen SSH-/sudo-Verbindungen geprueft.
+      when: rotation_successful | default(false)
