@@ -1,0 +1,84 @@
+
+---
+# ============================================================
+# Validate removal parameters
+# ============================================================
+
+- name: Validate SSH public key removal parameters
+  ansible.builtin.assert:
+    that:
+      - ssh_user_name is defined
+      - ssh_user_name | string | trim | length > 0
+      - ssh_user_primary_group is defined
+      - >-
+        (ssh_public_key_to_remove is defined
+        and ssh_public_key_to_remove | string | trim | length > 0)
+        or (key_name is defined and key_name | string | trim | length > 0)
+    fail_msg: >-
+      ssh_user_name und entweder ssh_public_key_to_remove
+      oder key_name muessen definiert sein.
+
+# ============================================================
+# Resolve public key to remove
+# ============================================================
+
+- name: Resolve SSH public key to remove
+  ansible.builtin.set_fact:
+    ssh_public_key_remove_content: >-
+      {{
+        (
+          ssh_public_key_to_remove
+          if (
+            ssh_public_key_to_remove is defined
+            and ssh_public_key_to_remove | string | trim | length > 0
+          )
+          else lookup(
+            'ansible.builtin.file',
+            public_keys_dir ~ '/' ~ key_name ~ '.pub'
+          )
+        ) | trim
+      }}
+
+- name: Validate SSH public key format
+  ansible.builtin.assert:
+    that:
+      - ssh_public_key_remove_content.split() | length >= 2
+      - ssh_public_key_remove_content.split()[0] is match('^(ssh-|ecdsa-|sk-)')
+      - ssh_public_key_remove_content.split()[1] is match('^[A-Za-z0-9+/]+={0,3}$')
+    fail_msg: >-
+      Der zu entfernende Public Key muss mit dem SSH-Schluesseltyp
+      und dem Base64-kodierten Schluessel beginnen.
+
+# ============================================================
+# Check authorized_keys
+# ============================================================
+
+- name: Check authorized_keys file
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+  register: ssh_authorized_keys_remove_stat
+
+- name: Verify authorized_keys file type
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ssh_authorized_keys_remove_stat.stat.exists
+        or (ssh_authorized_keys_remove_stat.stat.isreg | default(false))
+    fail_msg: >-
+      authorized_keys ist keine regulaere Datei.
+
+# ============================================================
+# Remove public key without modifying other keys
+# ============================================================
+
+- name: Remove SSH public key
+  ansible.builtin.lineinfile:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    regexp: >-
+      ^(?![ \t]*#)[ \t]*(?:(?:[^ \t"]|"[^"]*")+[ \t]+)?{{ ssh_public_key_remove_content.split()[0] | regex_escape }}[ \t]+{{ ssh_public_key_remove_content.split()[1] | regex_escape }}(?:[ \t]|$)
+    state: absent
+    create: false
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
+    mode: '0600'
+  when: ssh_authorized_keys_remove_stat.stat.isreg | default(false)
