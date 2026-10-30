@@ -1,3 +1,4 @@
+
 """Interactive management UI for the repository-root launch.py command.
 
 The menu only builds CLI arguments. Encryption, decryption and subprocess
