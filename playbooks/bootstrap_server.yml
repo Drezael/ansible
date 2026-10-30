@@ -36,10 +36,6 @@
         host_specs_path: "{{ host_specs_file }}"
         host_specs_expected_hostname: "{{ inventory_hostname }}"
 
-    - name: debug
-      ansible.builtin.debug:
-        msg: "{{ host_specs }}"
-
     - name: Validate bootstrap state
       ansible.builtin.assert:
         that:
