@@ -4,3 +4,8 @@
     file: "{{ roles_dir }}/server/vars/default.yml"
     name: default
 
+- name: Configure hostname
+  ansible.builtin.include_tasks: 
+    file: "{{ roles_dir }}/server/tasks/hostname.yml"
+  vars:
+    hostname: "{{ host_specs.hostname }}"
