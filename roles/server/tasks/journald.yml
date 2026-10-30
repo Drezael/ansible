@@ -1,0 +1,10 @@
+---
+- name: Configure system journal
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/journald.yml"
+  vars:
+    server_journald_system_max_use: "{{ host_journald_system_max_use }}"
+    server_journald_system_keep_free: "{{ host_journald_system_keep_free }}"
+    server_journald_system_max_file_size: "{{ host_journald_system_max_file_size }}"
+    server_journald_max_retention: "{{ host_journald_max_retention }}"
+    server_journald_max_file_sec: "{{ host_journald_max_file_sec }}"
