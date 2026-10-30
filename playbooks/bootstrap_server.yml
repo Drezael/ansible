@@ -13,7 +13,7 @@
     - "{{ vaults_dir }}/master.vault"
 
   vars:
-    host_specs_file: "{{ vars_dir }}/host_vars/{{ hostname }}.yml"
+    host_specs_file: "{{ vars_dir }}/host_vars/{{ inventory_hostname }}.yml"
 
   pre_tasks:
     - name: Validate hostname argument
@@ -34,7 +34,7 @@
           become: false
       vars:
         host_specs_path: "{{ host_specs_file }}"
-        host_specs_expected_hostname: "{{ hostname }}"  
+        host_specs_expected_hostname: "{{ inventory_hostname }}"
 
     - name: debug
       ansible.builtin.debug:
