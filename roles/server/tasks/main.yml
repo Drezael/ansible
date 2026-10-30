@@ -29,3 +29,9 @@
     file: "{{ roles_dir }}/server/tasks/timezone.yml"
   vars:
     host_timezone: "{{ host_specs.timezone | default(default.timezone) }}"
+
+- name: Configure NTP time synchronization
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/ntp.yml"
+  vars:
+    host_ntp_server: "{{ host_specs.ntp_server | default(default.ntp_server) }}"
