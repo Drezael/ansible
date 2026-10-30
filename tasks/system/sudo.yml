@@ -1,0 +1,19 @@
+---
+- name: Configure sudo permissions
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ sudo_user }}"
+    owner: root
+    group: root
+    mode: '0440'
+    content: |
+      # Managed by Ansible
+
+      Defaults:{{ sudo_user }} timestamp_timeout=0
+
+      {{ sudo_user }} ALL=(ALL:ALL) PASSWD: ALL
+    validate: '/usr/sbin/visudo -cf %s'
+
+- name: Validate sudo configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/visudo -c
+  changed_when: false

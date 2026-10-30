@@ -1,0 +1,7 @@
+---
+- name: Remove unused APT packages
+  ansible.builtin.apt:
+    autoremove: true
+    purge: false
+    force_apt_get: true
+    lock_timeout: 300

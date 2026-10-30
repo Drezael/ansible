@@ -1,0 +1,48 @@
+---
+- name: Create journald configuration directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure persistent system logging
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/99-ansible.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Journal]
+      Storage=persistent
+      Compress=yes
+      SystemMaxUse={{ journald_system_max_use }}
+      SystemKeepFree={{ journald_system_keep_free }}
+      SystemMaxFileSize={{ journald_system_max_file_size }}
+      MaxRetentionSec={{ journald_max_retention }}
+      MaxFileSec={{ journald_max_file_sec }}
+  register: journald_config
+
+- name: Restart journald if configuration changed
+  ansible.builtin.systemd_service:
+    name: systemd-journald.service
+    state: restarted
+  when: journald_config.changed
+
+- name: Flush journal to persistent storage
+  ansible.builtin.command:
+    cmd: /usr/bin/journalctl --flush
+  changed_when: false
+  when: journald_config.changed
+
+- name: Verify persistent journal directory
+  ansible.builtin.stat:
+    path: /var/log/journal
+  register: journald_directory
+
+- name: Verify persistent logging is available
+  ansible.builtin.assert:
+    that:
+      - journald_directory.stat.isdir | default(false)
+    fail_msg: "Das persistente Journal-Verzeichnis fehlt."

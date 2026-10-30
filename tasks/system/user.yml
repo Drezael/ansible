@@ -1,0 +1,21 @@
+- name: Manage User
+  ansible.builtin.user:
+    name: "{{ user_name }}"
+    comment: "{{ user_comment | default(omit) }}"
+    group: "{{ user_primary_group }}"
+    groups: >-
+      {{
+        user_groups
+        | default([], true)
+        | reject('equalto', user_primary_group)
+        | list
+        | join(',')
+      }}
+    append: true
+    home: "/home/{{ user_name }}"
+    shell: /bin/bash
+    create_home: true
+    password: "{{ user_password | default(omit) }}"
+    password_lock: "{{ user_password_lock | default(omit) }}"
+    update_password: "{{ user_update_password | default('on_create') }}"
+    state: "{{ user_state }}"

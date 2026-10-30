@@ -1,0 +1,18 @@
+---
+# ============================================================
+# Base packages for all Ubuntu servers
+# ============================================================
+
+base_packages:
+  - ca-certificates
+  - curl
+  - wget
+  - vim
+  - htop
+  - jq
+  - git
+  - rsync
+  - chrony
+  - locales
+  - logrotate
+  - ufw

@@ -1,0 +1,7 @@
+---
+- name: Upgrade installed packages
+  ansible.builtin.apt:
+    upgrade: safe
+    force_apt_get: true
+    fail_on_autoremove: true
+    lock_timeout: 300

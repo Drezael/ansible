@@ -1,0 +1,5 @@
+---
+- name: Manage Group
+  ansible.builtin.group:
+    name: "{{ group_name }}"
+    state: "{{ group_state }}"

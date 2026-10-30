@@ -1,0 +1,45 @@
+---
+- name: Configure SSH public key authentication
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-ansible-authentication.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible
+
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AuthenticationMethods publickey
+    validate: '/usr/sbin/sshd -t -f %s'
+  register: ssh_auth_config
+
+- name: Validate complete SSH configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Read effective SSH authentication settings
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/sshd
+      - -T
+      - -C
+      - user=ansible,host=localhost,addr=127.0.0.1
+  register: ssh_auth_effective
+  changed_when: false
+
+- name: Verify SSH authentication settings
+  ansible.builtin.assert:
+    that:
+      - "'pubkeyauthentication yes' in ssh_auth_effective.stdout_lines"
+      - "'passwordauthentication no' in ssh_auth_effective.stdout_lines"
+      - "'kbdinteractiveauthentication no' in ssh_auth_effective.stdout_lines"
+      - "'authenticationmethods publickey' in ssh_auth_effective.stdout_lines"
+
+- name: Reload SSH service
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+  when: ssh_auth_config.changed

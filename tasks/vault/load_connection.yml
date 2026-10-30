@@ -1,0 +1,45 @@
+---
+# ============================================================
+# Ansible sudo passwords
+# ============================================================
+
+- name: Load Ansible sudo passwords Vault
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/vault/load.yml"
+  vars:
+    vault_load_file: "{{ vaults_dir }}/ansible_sudo_passwords.vault"
+    vault_load_password: "{{ master_vault.ansible_sudo_passwords_vault_password }}"
+    vault_load_id: ansible_sudo_passwords
+    vault_load_key: sudo_passwords
+    vault_load_fact: sudo_passwords_vault
+  no_log: true
+
+# ============================================================
+# SSH key passphrases
+# ============================================================
+
+- name: Load SSH key passphrases Vault
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/vault/load.yml"
+  vars:
+    vault_load_file: "{{ vaults_dir }}/ssh_keys_passphrases.vault"
+    vault_load_password: "{{ master_vault.ssh_keys_passphrases_vault_password }}"
+    vault_load_id: ssh_keys_passphrases
+    vault_load_key: ssh_keys_passphrases
+    vault_load_fact: key_passphrases_vault
+  no_log: true
+
+# ============================================================
+# SSH private key Vault passwords
+# ============================================================
+
+- name: Load SSH key Vault passwords
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/vault/load.yml"
+  vars:
+    vault_load_file: "{{ vaults_dir }}/ssh_keys_vaults_passwords.vault"
+    vault_load_password: "{{ master_vault.ssh_keys_vaults_passwords_vault_password }}"
+    vault_load_id: ssh_keys_vaults_passwords
+    vault_load_key: vaults
+    vault_load_fact: vault_passwords_vault
+  no_log: true

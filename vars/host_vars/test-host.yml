@@ -1,0 +1,20 @@
+---
+
+bootstrap: true
+hostname: test-host
+domain: leikam-barz.de
+users:
+  ansible:
+    state: present
+firewall:
+  default_incoming: deny
+  default_outgoing: allow
+  rules:
+    # SSH
+    - action: allow
+      direction: in
+      protocol: tcp
+      port: 22
+host_roles:
+  - server
+  - ufw

@@ -1,0 +1,45 @@
+---
+
+- name: Assign host specifications
+  ansible.builtin.set_fact:
+    host_specs: "{{ host_specifications }}"
+
+- name: Hostname ausgeben
+  ansible.builtin.debug:
+    msg: "{{ ansible_facts['hostname'] }}"
+
+- name: Configure hostname
+  ansible.builtin.include_tasks: 
+    file: "{{ tasks_dir }}/system/hostname.yml"
+  vars:
+    hostname: "{{ host_specs.hostname }}"
+
+- name: Configure local hosts
+  ansible.builtin.include_tasks: 
+    file: "{{ tasks_dir }}/system/hosts.yml"
+  vars:
+    hostname: "{{ host_specs.hostname }}"
+
+- name: Configure system locale
+  ansible.builtin.include_tasks: 
+    file: "{{ tasks_dir }}/system/locale.yml"
+  vars:
+    locale: "{{ host_specs.locale }}"
+
+- name: Configure timezone
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/timezone.yml"
+  vars:
+    timezone: "{{ host_specs.timezone }}"
+
+#- name: Create Service Group
+#  ansible.builtin.include_tasks: 
+#    file: "{{ tasks_dir }}/system/group.yml"
+#  vars:
+#    group_name: "{{ ansible_service_user }}"
+
+#- name: Create Service User
+#  ansible.builtin.include_tasks: 
+#    file: "{{ tasks_dir }}/system/user.yml"
+#  vars:
+#    group_name: "{{ ansible_service_user }}"

@@ -1,0 +1,23 @@
+---
+- name: Enable and start Chrony
+  ansible.builtin.systemd_service:
+    name: chrony
+    enabled: true
+    state: started
+
+- name: Read NTP synchronization status
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/timedatectl
+      - show
+      - --property=NTPSynchronized
+      - --value
+  register: ntp_sync_status
+  changed_when: false
+
+- name: Report NTP synchronization status
+  ansible.builtin.debug:
+    msg: >-
+      NTP synchronization:
+      {{ 'active' if ntp_sync_status.stdout | trim == 'yes'
+         else 'not yet synchronized' }}

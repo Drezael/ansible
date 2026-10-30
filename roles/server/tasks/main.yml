@@ -1,0 +1,6 @@
+---
+- name: Load default variables
+  ansible.builtin.include_vars:
+    file: "{{ roles_dir }}/server/vars/default.yml"
+    name: default
+

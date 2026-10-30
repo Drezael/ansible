@@ -1,0 +1,41 @@
+---
+# ============================================================
+# Check host specifications
+# ============================================================
+
+- name: Check host specification file
+  ansible.builtin.stat:
+    path: "{{ host_specs_path }}"
+  delegate_to: localhost
+  become: false
+  register: host_specs_file_stat
+
+- name: Verify host specification file exists
+  ansible.builtin.assert:
+    that:
+      - host_specs_file_stat.stat.isreg | default(false)
+    fail_msg: >-
+      Die Serverdefinition {{ host_specs_path }} existiert nicht.
+
+# ============================================================
+# Load host specifications
+# ============================================================
+
+- name: Load host specifications
+  ansible.builtin.include_vars:
+    file: "{{ host_specs_path }}"
+
+# ============================================================
+# Validate host specifications
+# ============================================================
+
+- name: Verify host specification hostname
+  ansible.builtin.assert:
+    that:
+      - host_specs is mapping
+      - host_specs.hostname is defined
+      - host_specs.hostname == host_specs_expected_hostname
+    fail_msg: >-
+      Der Hostname in der Serverdefinition
+      {{ host_specs_path }} stimmt nicht mit
+      {{ host_specs_expected_hostname }} überein.

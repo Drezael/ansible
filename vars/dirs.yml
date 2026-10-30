@@ -1,0 +1,8 @@
+---
+base_dir: "{{ playbook_dir | dirname }}"
+playbooks_dir: "{{ base_dir }}/playbooks"
+roles_dir: "{{ base_dir }}/roles"
+tasks_dir: "{{ base_dir }}/tasks"
+vars_dir: "{{ base_dir }}/vars"
+vaults_dir: "{{ base_dir }}/vaults"
+public_keys_dir: "{{ base_dir }}/public_keys"

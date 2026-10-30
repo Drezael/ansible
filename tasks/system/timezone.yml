@@ -1,0 +1,23 @@
+---
+- name: Read current system timezone
+  ansible.builtin.command:
+    cmd: timedatectl show --property=Timezone --value
+  register: current_timezone
+  changed_when: false
+
+- name: Configure system timezone
+  ansible.builtin.command:
+    argv:
+      - timedatectl
+      - set-timezone
+      - "{{ server_timezone }}"
+  when: current_timezone.stdout | trim != server_timezone
+
+- name: Verify system timezone
+  ansible.builtin.command:
+    cmd: timedatectl show --property=Timezone --value
+  register: verified_timezone
+  changed_when: false
+  failed_when: >-
+    verified_timezone.rc != 0
+    or verified_timezone.stdout | trim != server_timezone

@@ -1,0 +1,40 @@
+---
+- name: Disable root SSH login
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/01-ansible-root.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible
+      PermitRootLogin no
+    validate: '/usr/sbin/sshd -t -f %s'
+  register: ssh_root_config
+
+- name: Validate SSH configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Read effective root SSH configuration
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/sshd
+      - -T
+      - -C
+      - "user=root,host=localhost,addr=127.0.0.1"
+  register: ssh_root_effective
+  changed_when: false
+
+- name: Verify root SSH login is disabled
+  ansible.builtin.assert:
+    that:
+      - "'permitrootlogin no' in ssh_root_effective.stdout_lines"
+    fail_msg: "Der direkte SSH-Login für root ist weiterhin erlaubt."
+    success_msg: "Der direkte SSH-Login für root ist deaktiviert."
+
+- name: Reload SSH service
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+  when: ssh_root_config.changed

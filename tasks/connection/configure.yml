@@ -1,0 +1,45 @@
+---
+# ============================================================
+# Load SSH private key
+# ============================================================
+
+- name: Load SSH private key
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/vault/load.yml"
+    apply:
+      become: false
+  vars:
+    vault_load_file: "{{ vaults_dir }}/private_keys/{{ connection_key_name }}.vault"
+    vault_load_password: "{{ vault_passwords_vault[connection_key_name] }}"
+    vault_load_id: "{{ connection_key_name }}"
+    vault_load_format: raw
+    vault_load_fact: connection_private_key
+  no_log: true
+
+# ============================================================
+# Configure SSH connection
+# ============================================================
+
+- name: Configure SSH connection
+  ansible.builtin.set_fact:
+    ansible_user: "{{ connection_user }}"
+    ansible_private_key: "{{ connection_private_key }}"
+    ansible_private_key_passphrase: "{{ key_passphrases_vault[connection_key_name] }}"
+  no_log: true
+
+# ============================================================
+# Configure sudo authentication
+# ============================================================
+
+- name: Configure sudo authentication
+  ansible.builtin.set_fact:
+    ansible_become_password: "{{ sudo_passwords_vault[connection_sudo_key] }}"
+  when: connection_sudo_key is defined
+  no_log: true
+
+# ============================================================
+# Reset SSH connection
+# ============================================================
+
+- name: Reset SSH connection
+  ansible.builtin.meta: reset_connection

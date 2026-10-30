@@ -1,0 +1,53 @@
+---
+# ============================================================
+# Read encrypted Vault
+# ============================================================
+
+- name: Read encrypted Vault
+  ansible.builtin.slurp:
+    src: "{{ vault_load_file }}"
+  delegate_to: localhost
+  become: false
+  register: vault_load_content
+  no_log: true
+
+# ============================================================
+# Decrypt YAML Vault
+# ============================================================
+
+- name: Decrypt and load YAML Vault
+  ansible.builtin.set_fact:
+    "{{ vault_load_fact }}": >-
+      {{
+        (
+          vault_load_content.content
+          | b64decode
+          | ansible.builtin.unvault(
+              vault_load_password,
+              vault_id=vault_load_id
+            )
+          | from_yaml
+        )[vault_load_key]
+      }}
+  when: (vault_load_format | default('yaml')) == 'yaml'
+  become: false
+  no_log: true
+
+# ============================================================
+# Decrypt raw Vault
+# ============================================================
+
+- name: Decrypt and load raw Vault
+  ansible.builtin.set_fact:
+    "{{ vault_load_fact }}": >-
+      {{
+        vault_load_content.content
+        | b64decode
+        | ansible.builtin.unvault(
+            vault_load_password,
+            vault_id=vault_load_id
+          )
+      }}
+  when: (vault_load_format | default('yaml')) == 'raw'
+  become: false
+  no_log: true

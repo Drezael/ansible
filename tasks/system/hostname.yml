@@ -1,0 +1,5 @@
+---
+- name: Set system hostname
+  ansible.builtin.hostname:
+    name: "{{ server_hostname }}"
+  when: ansible_facts['hostname'] != server_hostname

@@ -1,0 +1,6 @@
+user_name: ansible
+user_home: /home/ansible
+create_user_home: True
+primary_group: ansible
+user_comment: Ansible Service User
+user_shell: /bin/bash

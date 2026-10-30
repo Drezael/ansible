@@ -1,0 +1,14 @@
+---
+- name: Enable logrotate timer
+  ansible.builtin.systemd_service:
+    name: logrotate.timer
+    enabled: true
+    state: started
+
+- name: Validate logrotate configuration
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/logrotate
+      - --debug
+      - /etc/logrotate.conf
+  changed_when: false

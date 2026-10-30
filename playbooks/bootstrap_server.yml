@@ -1,0 +1,360 @@
+---
+- name: bootstrap server
+  hosts: "{{ hostname }}"
+  remote_user: root
+  become: false
+  become_method: sudo
+  become_user: root
+  become_exe: /usr/bin/sudo.ws
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../vars/dirs.yml"
+    - "{{ vaults_dir }}/master.vault"
+
+  vars:
+    host_specs_file: "{{ vars_dir }}/host_vars/{{ hostname }}.yml"
+
+  pre_tasks:
+    - name: Validate hostname argument
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
+        fail_msg: "Bitte einen gültigen Hostnamen über -e hostname=<hostname> übergeben."
+
+    - name: Check host specification file
+      ansible.builtin.stat:
+        path: "{{ host_specs_file }}"
+      register: host_specs_file_stat
+      delegate_to: localhost
+
+    - name: Verify host specification file exists
+      ansible.builtin.assert:
+        that:
+          - host_specs_file_stat.stat.isreg | default(false)
+        fail_msg: "Die Serverdefinition {{ host_specs_file }} existiert nicht."
+
+    - name: Load host specifications
+      ansible.builtin.include_vars:
+        file: "{{ host_specs_file }}"
+
+    - name: debug
+      ansible.builtin.debug:
+        msg: "{{ host_specs }}"
+
+    - name: Validate bootstrap state
+      ansible.builtin.assert:
+        that:
+          - host_specs.bootstrap is not defined or host_specs.bootstrap is boolean
+        fail_msg: >-
+          Ungültiger Bootstrap-Status für {{ hostname }}.
+          host_specs.bootstrap muss true oder false sein.
+
+    - name: Verify bootstrap is not completed
+      ansible.builtin.assert:
+        that:
+          - not (host_specs.bootstrap | default(false))
+        fail_msg: >-
+          Bootstrap für {{ hostname }} wurde bereits durchgeführt.
+          Ein erneuter Bootstrap ist nicht erlaubt.
+        success_msg: >-
+          Bootstrap für {{ hostname }} ist noch nicht abgeschlossen.
+          Bootstrap darf ausgeführt werden.
+
+    # ============================================================
+    # Ansible sudo passwords
+    # ============================================================
+
+    - name: Read Ansible sudo passwords Vault
+      ansible.builtin.slurp:
+        src: "{{ vaults_dir }}/ansible_sudo_passwords.vault"
+      delegate_to: localhost
+      register: ansible_sudo_passwords_content
+      no_log: true
+
+    - name: Decrypt and load Ansible sudo passwords
+      ansible.builtin.set_fact:
+        sudo_passwords_vault: >-
+          {{
+            (
+              ansible_sudo_passwords_content.content
+              | b64decode
+              | ansible.builtin.unvault(
+                  master_vault.ansible_sudo_passwords_vault_password,
+                  vault_id='ansible_sudo_passwords'
+                )
+              | from_yaml
+            ).sudo_passwords
+          }}
+      no_log: true
+
+    # ============================================================
+    # SSH key passphrases
+    # ============================================================
+
+    - name: Read SSH key passphrases Vault
+      ansible.builtin.slurp:
+        src: "{{ vaults_dir }}/ssh_keys_passphrases.vault"
+      delegate_to: localhost
+      register: ssh_keys_passphrases_content
+      no_log: true
+
+    - name: Decrypt and load SSH key passphrases
+      ansible.builtin.set_fact:
+        key_passphrases_vault: >-
+          {{
+            (
+              ssh_keys_passphrases_content.content
+              | b64decode
+              | ansible.builtin.unvault(
+                  master_vault.ssh_keys_passphrases_vault_password,
+                  vault_id='ssh_keys_passphrases'
+                )
+              | from_yaml
+            ).ssh_keys_passphrases
+          }}
+      no_log: true
+
+    # ============================================================
+    # SSH private key Vault passwords
+    # ============================================================
+
+    - name: Read SSH key Vault passwords
+      ansible.builtin.slurp:
+        src: "{{ vaults_dir }}/ssh_keys_vaults_passwords.vault"
+      delegate_to: localhost
+      register: ssh_keys_vaults_passwords_content
+      no_log: true
+
+    - name: Decrypt and load SSH key Vault passwords
+      ansible.builtin.set_fact:
+        vault_passwords_vault: >-
+          {{
+            (
+              ssh_keys_vaults_passwords_content.content
+              | b64decode
+              | ansible.builtin.unvault(
+                  master_vault.ssh_keys_vaults_passwords_vault_password,
+                  vault_id='ssh_keys_vaults_passwords'
+                )
+              | from_yaml
+            ).vaults
+          }}
+      no_log: true
+
+    # ============================================================
+    # sudo passwords salts vault
+    # ============================================================
+
+    - name: Read sudo passwords salts vault
+      ansible.builtin.slurp:
+        src: "{{ vaults_dir }}/sudo_passwords_salts.vault"
+      delegate_to: localhost
+      register: sudo_passwords_salts_content
+      no_log: true
+
+    - name: Decrypt and load sudo passwords salts vault
+      ansible.builtin.set_fact:
+        sudo_passwords_salts_vault: >-
+          {{
+            (
+              sudo_passwords_salts_content.content
+              | b64decode
+              | ansible.builtin.unvault(
+                  master_vault.sudo_passwords_salts_vault_password,
+                  vault_id='sudo_passwords_salts'
+                )
+              | from_yaml
+            ).salts
+          }}
+      no_log: true
+
+    - name: debug
+      ansible.builtin.debug:
+        msg: "{{ key_passphrases_vault }}"    
+
+    - name: debug
+      ansible.builtin.debug:
+        msg: "{{ vault_passwords_vault }}" 
+
+    - name: debug
+      ansible.builtin.debug:
+        msg: "{{ master_vault }}" 
+
+    - name: debug
+      ansible.builtin.debug:
+        msg: "{{ sudo_passwords_salts_vault }}" 
+
+    - name: Configure bootstrap SSH connection
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/connection/configure.yml"
+      vars:
+        connection_user: root
+        connection_key_name: ansible_bootstrap    
+
+    - name: Gather server facts
+      ansible.builtin.setup:
+
+  tasks:
+
+    - name: Install sudo
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/apt/install.yml"
+      vars:
+        apt_install_packages: sudo
+        packages_state: present
+
+    - name: Load Ansible service user declaration
+      ansible.builtin.include_vars:
+        file: "{{ vars_dir }}/users/ansible.yml"
+        name: service_user
+
+    - name: Create primary user group
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/system/group.yml"
+      vars:
+        group_name: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        group_state: present
+
+    - name: Create service user
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/system/user.yml"
+      vars:
+        user_name: "{{ service_user.user_name }}"
+        user_home: "{{ service_user.user_home }}"
+        create_user_home: "{{ service_user.create_user_home }}"
+        user_primary_group: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        user_comment: "{{ service_user.user_comment }}"
+        user_shell: "{{ service_user.user_shell }}"
+        user_state: present
+        user_update_password: always
+        user_password_lock: false
+        user_password: >-
+          {{
+            sudo_passwords_vault[inventory_hostname]
+            | ansible.builtin.password_hash(
+                'sha512',
+                salt=sudo_passwords_salts_vault[hostname],
+                rounds=100000
+              )
+          }}
+      no_log: true
+
+    - name: Install ansible service key
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/ssh/install_public_key.yml"
+      vars:
+        user_name: "{{ service_user.user_name }}"
+        user_primary_group: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        key_name: "{{ hostname }}"
+
+    - name: "Grant user {{ service_user.user_name }} sudo rights"
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/system/sudo.yml"
+      vars:
+        sudo_user: "{{ service_user.user_name }}"
+
+    - name: set ssh login to key only
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/ssh/key_only.yml"
+
+    - name: Configure Ansible service connection
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/connection/configure.yml"
+      vars:
+        connection_user: "{{ service_user.user_name }}"
+        connection_key_name: "{{ hostname }}"
+        connection_sudo_key: "{{ hostname }}"
+
+        # ============================================================
+    # Verify Ansible service connection
+    # ============================================================
+
+    - name: Verify Ansible SSH login
+      ansible.builtin.command:
+        cmd: /usr/bin/id -un
+      become: false
+      register: ssh_login
+      changed_when: false
+      failed_when: >-
+        ssh_login.rc != 0
+        or ssh_login.stdout | trim != service_user.user_name
+
+    # ============================================================
+    # Verify sudo authentication
+    # ============================================================
+
+    - name: Clear sudo authentication cache
+      ansible.builtin.command:
+        cmd: /usr/bin/sudo.ws -k
+      become: false
+      changed_when: false
+
+    - name: Verify sudo requires password
+      ansible.builtin.command:
+        cmd: /usr/bin/sudo.ws -n /usr/bin/id -u
+      become: false
+      register: sudo_without_password
+      changed_when: false
+      failed_when: sudo_without_password.rc == 0
+
+    - name: Verify sudo with Vault password
+      ansible.builtin.command:
+        cmd: /usr/bin/id -u
+      become: true
+      vars:
+        ansible_become_exe: /usr/bin/sudo.ws
+      register: sudo_with_password
+      changed_when: false
+      failed_when: >-
+        sudo_with_password.rc != 0
+        or sudo_with_password.stdout | trim != '0'
+
+    - name: Verify sudo requires password after authentication
+      ansible.builtin.command:
+        cmd: /usr/bin/sudo.ws -n /usr/bin/id -u
+      become: false
+      register: sudo_password_cache_test
+      changed_when: false
+      failed_when: sudo_password_cache_test.rc == 0
+
+    - name: Disable root SSH access
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/ssh/disable_root_login.yml"
+        apply:
+          become: true
+
+    - name: Reset SSH connection
+      ansible.builtin.meta: reset_connection
+
+    - name: Verify final SSH connection
+      ansible.builtin.command:
+        cmd: /usr/bin/id -un
+      become: false
+      register: final_ssh_test
+      changed_when: false
+      failed_when: >-
+        final_ssh_test.rc != 0
+        or final_ssh_test.stdout | trim != service_user.user_name
+
+    - name: Verify final sudo connection
+      ansible.builtin.command:
+        cmd: /usr/bin/id -u
+      become: true
+      register: final_sudo_test
+      changed_when: false
+      failed_when: >-
+        final_sudo_test.rc != 0
+        or final_sudo_test.stdout | trim != '0'
+
+    - name: Mark bootstrap as completed
+      ansible.builtin.lineinfile:
+        path: "{{ host_specs_file }}"
+        regexp: '^  bootstrap:'
+        insertafter: '^host_specs:$'
+        line: '  bootstrap: true'
+        state: present
+        create: false
+      delegate_to: localhost
+      become: false

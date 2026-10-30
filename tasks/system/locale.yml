@@ -1,0 +1,53 @@
+---
+- name: Enable system locale
+  ansible.builtin.lineinfile:
+    path: /etc/locale.gen
+    regexp: '^\s*#?\s*{{ server_locale | regex_escape }}\s+UTF-8\s*$'
+    line: "{{ server_locale }} UTF-8"
+  register: locale_definition
+
+- name: Read available locales
+  ansible.builtin.command:
+    cmd: /usr/bin/locale -a
+  register: available_locales
+  changed_when: false
+
+- name: Generate system locale
+  ansible.builtin.command:
+    cmd: /usr/sbin/locale-gen
+  when: >-
+    locale_definition.changed
+    or (server_locale | lower | replace('-', ''))
+       not in (available_locales.stdout | lower | replace('-', ''))
+
+- name: Verify generated locale
+  ansible.builtin.command:
+    cmd: /usr/bin/locale -a
+  register: verified_locales
+  changed_when: false
+  failed_when: >-
+    verified_locales.rc != 0
+    or (server_locale | lower | replace('-', ''))
+       not in (verified_locales.stdout | lower | replace('-', ''))
+
+- name: Read current default locale
+  ansible.builtin.command:
+    cmd: /usr/bin/localectl status
+  register: current_system_locale
+  changed_when: false
+
+- name: Configure default system locale
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/update-locale
+      - "LANG={{ server_locale }}"
+  when: "('LANG=' ~ server_locale) not in current_system_locale.stdout"
+
+- name: Verify default system locale
+  ansible.builtin.command:
+    cmd: /usr/bin/localectl status
+  register: verified_default_locale
+  changed_when: false
+  failed_when: >-
+    verified_default_locale.rc != 0
+    or ('LANG=' ~ server_locale) not in verified_default_locale.stdout

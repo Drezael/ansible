@@ -1,0 +1,111 @@
+---
+- name: prepare server
+  hosts: "{{ hostname }}"
+  remote_user: ansible
+  become: true
+  become_method: sudo
+  become_user: root
+  become_exe: /usr/bin/sudo.ws
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../vars/dirs.yml"
+    - "{{ vaults_dir }}/master.vault"
+
+  vars:
+    host_specs_file: "{{ vars_dir }}/host_vars/{{ hostname }}.yml"
+
+  pre_tasks:
+
+    # ============================================================
+    # Validate hostname
+    # ============================================================
+
+    - name: Validate hostname argument
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
+        fail_msg: "Bitte einen gültigen Hostnamen über -e hostname=<hostname> übergeben."
+
+    # ============================================================
+    # Load host specifications
+    # ============================================================
+
+    - name: Load host specifications
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/host_specs/load.yml"
+        apply:
+          become: false
+      vars:
+        host_specs_path: "{{ host_specs_file }}"
+        host_specs_expected_hostname: "{{ hostname }}"
+
+    # ============================================================
+    # Verify bootstrap state
+    # ============================================================
+
+    - name: Verify bootstrap is completed
+      ansible.builtin.assert:
+        that:
+          - (host_specs.bootstrap | default(false)) is sameas true
+        fail_msg: >-
+          Der Server {{ hostname }} wurde noch nicht vollständig
+          gebootstrappt. Bitte zuerst bootstrap_server.yml ausführen.
+        success_msg: >-
+          Bootstrap für {{ hostname }} ist abgeschlossen.
+          Die Serverkonfiguration darf gestartet werden.
+    
+    # ============================================================
+    # Load connection Vaults
+    # ============================================================
+
+    - name: Load connection Vaults
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/vault/load_connection.yml"
+        apply:
+          become: false
+
+    # ============================================================
+    # Configure Ansible service connection
+    # ============================================================
+
+    - name: Configure Ansible service connection
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/connection/configure.yml"
+        apply:
+          become: false
+      vars:
+        connection_user: ansible
+        connection_key_name: "{{ hostname }}"
+        connection_sudo_key: "{{ hostname }}"
+
+    # ============================================================
+    # Gather server facts
+    # ============================================================
+
+    - name: Gather server facts
+      ansible.builtin.setup:
+
+  tasks:
+
+    - name: Validate server roles
+      ansible.builtin.assert:
+        that:
+          - host_specs.roles is defined
+          - host_specs.roles is sequence
+          - host_specs.roles is not string
+          - host_specs.roles | length > 0
+        fail_msg: >-
+          Für {{ hostname }} wurden keine gültigen Rollen definiert.
+
+    # ============================================================
+    # Execute server roles
+    # ============================================================
+
+    - name: Execute server roles
+      ansible.builtin.include_role:
+        name: "{{ server_role }}"
+      loop: "{{ host_specs.roles }}"
+      loop_control:
+        loop_var: server_role 
