@@ -1,0 +1,30 @@
+
+---
+# ============================================================
+# Save encrypted YAML Vault
+# ============================================================
+
+- name: Save encrypted YAML Vault
+  ansible.builtin.copy:
+    dest: "{{ vault_save_file }}"
+    mode: '0600'
+    decrypt: false
+    content: >-
+      {{
+        {
+          vault_save_key: (
+            vault_save_entries
+            | combine({
+                vault_save_host: vault_save_value
+              })
+          )
+        }
+        | to_nice_yaml(indent=2, sort_keys=false)
+        | ansible.builtin.vault(
+            vault_save_password,
+            vault_id=vault_save_id
+          )
+      }}
+  delegate_to: localhost
+  become: false
+  no_log: true
