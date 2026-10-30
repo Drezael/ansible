@@ -1,32 +1,60 @@
 ---
-- name: prepare server
+# ============================================================
+# Validate playbook invocation
+# ============================================================
+
+- name: Validate prepare server request
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  tasks:
+
+    - name: Validate hostname argument
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - hostname is string
+          - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
+          - hostname | default('') in (groups['all'] | default([]))
+        fail_msg: >-
+          Bitte einen gültigen, im Inventory vorhandenen
+          Hostnamen über -e hostname=<hostname> übergeben.
+
+# ============================================================
+# Prepare server
+# ============================================================
+
+- name: Prepare server
   hosts: "{{ hostname }}"
+  serial: 1
+  any_errors_fatal: true
+
   remote_user: ansible
   become: true
   become_method: sudo
   become_user: root
   become_exe: /usr/bin/sudo.ws
+
   gather_facts: false
+
+  # ============================================================
+  # Load variables
+  # ============================================================
 
   vars_files:
     - "{{ playbook_dir }}/../vars/dirs.yml"
     - "{{ vaults_dir }}/master.vault"
 
   vars:
-    host_specs_file: "{{ vars_dir }}/host_vars/{{ hostname }}.yml"
+    host_specs_file: "{{ vars_dir }}/host_vars/{{ inventory_hostname }}.yml"
+
+  # ============================================================
+  # Pre-tasks
+  # ============================================================
 
   pre_tasks:
-
-    # ============================================================
-    # Validate hostname
-    # ============================================================
-
-    - name: Validate hostname argument
-      ansible.builtin.assert:
-        that:
-          - hostname is defined
-          - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
-        fail_msg: "Bitte einen gültigen Hostnamen über -e hostname=<hostname> übergeben."
 
     # ============================================================
     # Load host specifications
@@ -39,7 +67,7 @@
           become: false
       vars:
         host_specs_path: "{{ host_specs_file }}"
-        host_specs_expected_hostname: "{{ hostname }}"
+        host_specs_expected_hostname: "{{ inventory_hostname }}"
 
     # ============================================================
     # Verify bootstrap state
@@ -48,14 +76,106 @@
     - name: Verify bootstrap is completed
       ansible.builtin.assert:
         that:
-          - (host_specs.bootstrap | default(false)) is sameas true
+          - host_specs.bootstrap is sameas true
         fail_msg: >-
-          Der Server {{ hostname }} wurde noch nicht vollständig
-          gebootstrappt. Bitte zuerst bootstrap_server.yml ausführen.
+          Der Server {{ inventory_hostname }} wurde
+          noch nicht vollständig gebootstrappt.
+          Bitte zuerst bootstrap_server.yml ausführen.
         success_msg: >-
-          Bootstrap für {{ hostname }} ist abgeschlossen.
-          Die Serverkonfiguration darf gestartet werden.
-    
+          Bootstrap für {{ inventory_hostname }}
+          ist abgeschlossen.
+
+    # ============================================================
+    # Verify secrets state
+    # ============================================================
+
+    - name: Verify server secrets are available
+      ansible.builtin.assert:
+        that:
+          - host_specs.secrets is sameas true
+        fail_msg: >-
+          Für {{ inventory_hostname }} sind noch
+          keine vollständig generierten Secrets vorhanden.
+          Die Serverkonfiguration wird nicht gestartet.
+        success_msg: >-
+          Die Secrets für {{ inventory_hostname }}
+          sind vorhanden.
+
+    # ============================================================
+    # Validate server roles
+    # ============================================================
+
+    - name: Validate server role definitions
+      ansible.builtin.assert:
+        that:
+          - host_specs.host_roles is defined
+          - host_specs.host_roles is sequence
+          - host_specs.host_roles is not string
+          - host_specs.host_roles is not mapping
+          - host_specs.host_roles | length > 0
+          - (host_specs.host_roles | unique | list | length) == (host_specs.host_roles | length)
+        fail_msg: >-
+          Für {{ inventory_hostname }} wurden keine
+          gültigen oder eindeutigen Rollen definiert.
+          Erwartet wird eine Liste unter host_roles.
+
+    - name: Validate configured role names
+      ansible.builtin.assert:
+        that:
+          - server_role is string
+          - server_role is match('^[A-Za-z_][A-Za-z0-9_-]*$')
+        fail_msg: >-
+          Ungültiger Rollenname in der
+          Hostdefinition von {{ inventory_hostname }}.
+      loop: "{{ host_specs.host_roles }}"
+      loop_control:
+        loop_var: server_role
+        label: "{{ server_role }}"
+
+    # ============================================================
+    # Validate required server parameters
+    # ============================================================
+
+    - name: Validate server domain
+      ansible.builtin.assert:
+        that:
+          - host_specs.domain is defined
+          - host_specs.domain is string
+          - host_specs.domain | length > 0
+        fail_msg: >-
+          Für {{ inventory_hostname }} wurde
+          keine gültige Domain definiert.
+      when: "'server' in host_specs.host_roles"
+
+    # ============================================================
+    # Verify role files exist
+    # ============================================================
+
+    - name: Check configured role entry points
+      ansible.builtin.stat:
+        path: "{{ roles_dir }}/{{ server_role }}/tasks/main.yml"
+      delegate_to: localhost
+      become: false
+      register: server_role_checks
+      loop: "{{ host_specs.host_roles }}"
+      loop_control:
+        loop_var: server_role
+        label: "{{ server_role }}"
+
+    - name: Verify configured roles exist
+      ansible.builtin.assert:
+        that:
+          - role_entrypoint.stat.isreg | default(false)
+        fail_msg: >-
+          Die Rolle {{ role_entrypoint.server_role }}
+          wurde nicht gefunden.
+          Erwartete Datei:
+          {{ roles_dir }}/{{ role_entrypoint.server_role }}/tasks/main.yml
+      loop: "{{ server_role_checks.results }}"
+      loop_control:
+        loop_var: role_entrypoint
+        label: "{{ role_entrypoint.server_role }}"
+
     # ============================================================
     # Load connection Vaults
     # ============================================================
@@ -65,6 +185,7 @@
         file: "{{ tasks_dir }}/vault/load_connection.yml"
         apply:
           become: false
+      no_log: true
 
     # ============================================================
     # Configure Ansible service connection
@@ -77,8 +198,49 @@
           become: false
       vars:
         connection_user: ansible
-        connection_key_name: "{{ hostname }}"
-        connection_sudo_key: "{{ hostname }}"
+        connection_key_name: "{{ inventory_hostname }}"
+        connection_sudo_key: "{{ inventory_hostname }}"
+      no_log: true
+
+    # ============================================================
+    # Verify SSH connection
+    # ============================================================
+
+    - name: Verify Ansible SSH login
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/id
+          - -un
+      become: false
+      register: server_ssh_login
+      changed_when: false
+      failed_when: >-
+        server_ssh_login.rc != 0
+        or server_ssh_login.stdout | trim != 'ansible'
+
+    # ============================================================
+    # Verify sudo authentication
+    # ============================================================
+
+    - name: Clear sudo authentication cache
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/sudo.ws
+          - -k
+      become: false
+      changed_when: false
+
+    - name: Verify sudo authentication
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/id
+          - -u
+      become: true
+      register: server_sudo_login
+      changed_when: false
+      failed_when: >-
+        server_sudo_login.rc != 0
+        or server_sudo_login.stdout | trim != '0'
 
     # ============================================================
     # Gather server facts
@@ -86,26 +248,20 @@
 
     - name: Gather server facts
       ansible.builtin.setup:
+      become: true
+
+  # ============================================================
+  # Execute server roles
+  # ============================================================
 
   tasks:
-
-    - name: Validate server roles
-      ansible.builtin.assert:
-        that:
-          - host_specs.roles is defined
-          - host_specs.roles is sequence
-          - host_specs.roles is not string
-          - host_specs.roles | length > 0
-        fail_msg: >-
-          Für {{ hostname }} wurden keine gültigen Rollen definiert.
-
-    # ============================================================
-    # Execute server roles
-    # ============================================================
 
     - name: Execute server roles
       ansible.builtin.include_role:
         name: "{{ server_role }}"
-      loop: "{{ host_specs.roles }}"
+      vars:
+        host_specifications: "{{ host_specs }}"
+      loop: "{{ host_specs.host_roles }}"
       loop_control:
-        loop_var: server_role 
+        loop_var: server_role
+        label: "{{ server_role }}"
