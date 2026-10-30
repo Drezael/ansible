@@ -1,11 +1,93 @@
----
-- name: Enable and start Chrony
-  ansible.builtin.systemd_service:
-    name: chrony
-    enabled: true
-    state: started
 
-- name: Read NTP synchronization status
+---
+# ============================================================
+# Validate NTP configuration
+# ============================================================
+
+- name: Validate NTP server
+  ansible.builtin.assert:
+    that:
+      - server_ntp_server is string
+      - server_ntp_server | length > 0
+      - server_ntp_server | length <= 253
+      - server_ntp_server is match('^[A-Za-z0-9:][A-Za-z0-9._:-]*$')
+    fail_msg: >-
+      Ungueltiger NTP-Server.
+      Es muss ein einzelner Hostname oder eine IP-Adresse
+      ohne Leerzeichen angegeben werden.
+
+# ============================================================
+# Install NTP client
+# ============================================================
+
+- name: Install systemd-timesyncd
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/apt/install.yml"
+  vars:
+    apt_install_packages:
+      - systemd-timesyncd
+    packages_state: present
+
+# ============================================================
+# Prepare NTP configuration
+# ============================================================
+
+- name: Create timesyncd configuration directory
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# ============================================================
+# Configure NTP server
+# ============================================================
+
+- name: Configure systemd-timesyncd
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/99-ansible-ntp.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Time]
+      NTP=
+      NTP={{ server_ntp_server }}
+  register: ntp_configuration
+
+# ============================================================
+# Enable and start NTP synchronization
+# ============================================================
+
+- name: Enable and start systemd-timesyncd
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd.service
+    enabled: true
+    state: "{{ 'restarted' if ntp_configuration.changed else 'started' }}"
+
+# ============================================================
+# Verify NTP service
+# ============================================================
+
+- name: Read NTP service status
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/timedatectl
+      - show
+      - --property=NTP
+      - --value
+  register: ntp_service_status
+  changed_when: false
+  failed_when: >-
+    ntp_service_status.rc != 0
+    or ntp_service_status.stdout | trim != 'yes'
+
+# ============================================================
+# Verify system clock synchronization
+# ============================================================
+
+- name: Wait for system clock synchronization
   ansible.builtin.command:
     argv:
       - /usr/bin/timedatectl
@@ -14,10 +96,19 @@
       - --value
   register: ntp_sync_status
   changed_when: false
+  until:
+    - ntp_sync_status.rc == 0
+    - ntp_sync_status.stdout | trim == 'yes'
+  retries: 12
+  delay: 5
 
-- name: Report NTP synchronization status
+# ============================================================
+# Report NTP status
+# ============================================================
+
+- name: Report configured NTP server
   ansible.builtin.debug:
     msg: >-
-      NTP synchronization:
-      {{ 'active' if ntp_sync_status.stdout | trim == 'yes'
-         else 'not yet synchronized' }}
+      NTP-Konfiguration abgeschlossen.
+      Konfigurierter Server: {{ server_ntp_server }}.
+      Systemzeit ist synchronisiert.
