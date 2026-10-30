@@ -244,7 +244,7 @@
       vars:
         user_name: "{{ service_user.user_name }}"
         user_primary_group: "{{ service_user.primary_group | default(service_user.user_name) }}"
-        key_name: "{{ hostname }}"
+        key_name: "{{ inventory_hostname }}"
 
     - name: "Grant user {{ service_user.user_name }} sudo rights"
       ansible.builtin.include_tasks:
@@ -261,10 +261,10 @@
         file: "{{ tasks_dir }}/connection/configure.yml"
       vars:
         connection_user: "{{ service_user.user_name }}"
-        connection_key_name: "{{ hostname }}"
-        connection_sudo_key: "{{ hostname }}"
+        connection_key_name: "{{ inventory_hostname }}"
+        connection_sudo_key: "{{ inventory_hostname }}"
 
-        # ============================================================
+    # ============================================================
     # Verify Ansible service connection
     # ============================================================
 
