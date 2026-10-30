@@ -24,13 +24,44 @@
   when: not ssh_directory_stat.stat.exists
 
 # ============================================================
+# Check authorized_keys file
+# ============================================================
+
+- name: Check authorized_keys file
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+  register: ssh_authorized_keys_stat
+
+# ============================================================
+# Create authorized_keys file
+# ============================================================
+
+- name: Create authorized_keys file
+  ansible.builtin.file:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    state: touch
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
+    mode: '0600'
+  when: not ssh_authorized_keys_stat.stat.exists
+
+# ============================================================
 # Install SSH public key
 # ============================================================
 
 - name: Install SSH public key
-  ansible.builtin.copy:
-    src: "{{ public_keys_dir }}/{{ key_name }}.pub"
-    dest: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+  ansible.builtin.lineinfile:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    line: >-
+      {{
+        lookup(
+          'ansible.builtin.file',
+          public_keys_dir ~ '/' ~ key_name ~ '.pub'
+        ) | trim
+      }}
+    state: present
+    insertafter: EOF
+    create: false
     owner: "{{ ssh_user_name }}"
     group: "{{ ssh_user_primary_group }}"
     mode: '0600'
