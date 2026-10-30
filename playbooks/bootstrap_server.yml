@@ -45,7 +45,7 @@
         that:
           - host_specs.bootstrap is not defined or host_specs.bootstrap is boolean
         fail_msg: >-
-          Ungültiger Bootstrap-Status für {{ hostname }}.
+          Ungültiger Bootstrap-Status für {{ inventory_hostname }}.
           host_specs.bootstrap muss true oder false sein.
 
     - name: Verify bootstrap is not completed
@@ -53,10 +53,10 @@
         that:
           - not (host_specs.bootstrap | default(false))
         fail_msg: >-
-          Bootstrap für {{ hostname }} wurde bereits durchgeführt.
+          Bootstrap für {{ inventory_hostname }} wurde bereits durchgeführt.
           Ein erneuter Bootstrap ist nicht erlaubt.
         success_msg: >-
-          Bootstrap für {{ hostname }} ist noch nicht abgeschlossen.
+          Bootstrap für {{ inventory_hostname }} ist noch nicht abgeschlossen.
           Bootstrap darf ausgeführt werden.
 
     # ============================================================
