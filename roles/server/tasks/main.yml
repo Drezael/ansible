@@ -23,3 +23,9 @@
     file: "{{ roles_dir }}/server/tasks/locale.yml"
   vars:
     host_locale: "{{ host_specs.locale | default(default.locale) }}"
+
+- name: Configure system timezone
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/timezone.yml"
+  vars:
+    host_timezone: "{{ host_specs.timezone | default(default.timezone) }}"
