@@ -3,4 +3,4 @@
   ansible.builtin.include_tasks: 
     file: "{{ tasks_dir }}/system/hostname.yml"
   vars:
-    server_hostname: "{{ host_specs.hostname }}"
+    server_hostname: "{{ hostname }}"
