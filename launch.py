@@ -12,6 +12,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import textwrap
 from pathlib import Path
 import signal
 import subprocess
@@ -197,8 +199,37 @@ def _read_playbook_metadata(playbook: Path) -> dict:
     raise ValueError("Kein Metadaten-Header im Playbook gefunden.")
 
 
+def _human_value(value: object) -> str:
+    """Format optional metadata values for terminal display."""
+    if value is True:
+        return "Ja"
+    if value is False:
+        return "Nein"
+    if value is None:
+        return "Nicht angegeben"
+    if isinstance(value, list):
+        return ", ".join(_human_value(item) for item in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{key}: {_human_value(item)}" for key, item in value.items())
+    return str(value)
+
+
+def _print_wrapped(value: object, *, indent: str = "  ") -> None:
+    """Wrap descriptions to the available terminal width."""
+    width = max(40, min(shutil.get_terminal_size(fallback=(96, 24)).columns, 100))
+    content = str(value).strip()
+    if not content:
+        content = "Keine Beschreibung vorhanden."
+    print(textwrap.fill(
+        content,
+        width=width,
+        initial_indent=indent,
+        subsequent_indent=indent,
+    ))
+
+
 def _show_playbook_detail(name: str) -> int:
-    """Show the full parsed metadata for one playbook, without a venv."""
+    """Show a readable German description of the playbook metadata."""
     playbook = _playbook_path(name)
     if playbook is None:
         return 2
@@ -208,10 +239,91 @@ def _show_playbook_detail(name: str) -> int:
         print(f"Fehler in playbooks/{playbook.name}: {exc}", file=sys.stderr)
         return 2
 
-    print(f"Playbook: {name}")
-    print(f"Datei: playbooks/{playbook.name}")
-    print("Metadaten:")
-    print(json.dumps(metadata, ensure_ascii=False, indent=2))
+    parameters = metadata.get("parameters", [])
+    if not isinstance(parameters, list) or any(not isinstance(p, dict) for p in parameters):
+        print(
+            f"Fehler in playbooks/{playbook.name}: "
+            "'parameters' muss eine Liste von JSON-Objekten sein.",
+            file=sys.stderr,
+        )
+        return 2
+
+    title = metadata.get("title") or name
+    width = max(40, min(shutil.get_terminal_size(fallback=(96, 24)).columns, 100))
+    print()
+    print("=" * width)
+    _print_wrapped(title, indent="")
+    print("=" * width)
+    print(f"  Playbook:        {name}")
+    print(f"  Datei:           playbooks/{playbook.name}")
+    print(f"  Kategorie:       {_human_value(metadata.get('category'))}")
+    print(f"  Schema-Version:  {_human_value(metadata.get('schema_version'))}")
+
+    print("\nBeschreibung")
+    print("------------")
+    _print_wrapped(metadata.get("description") or "Keine Beschreibung vorhanden.")
+
+    print("\nVoraussetzungen")
+    print("---------------")
+    for label, field in (
+        ("Inventory", "inventory_required"),
+        ("Master-Vault", "vault_required"),
+    ):
+        requirement = metadata.get(field)
+        if requirement is True:
+            value = "Erforderlich"
+        elif requirement is False:
+            value = "Nicht erforderlich"
+        else:
+            value = "Nicht angegeben"
+        print(f"  {label:<13}: {value}")
+
+    print("\nParameter")
+    print("---------")
+    if not parameters:
+        print("  Keine Parameter definiert.")
+    else:
+        types = {
+            "string": "Text",
+            "integer": "Ganzzahl",
+            "number": "Zahl",
+            "float": "Dezimalzahl",
+            "boolean": "Ja/Nein",
+            "array": "Liste",
+            "object": "Objekt",
+        }
+        for index, parameter in enumerate(parameters, start=1):
+            param_name = _human_value(parameter.get("name"))
+            type_name = str(parameter.get("type") or "Nicht angegeben")
+            type_label = types.get(type_name.lower(), type_name)
+            if parameter.get("required") is True:
+                requirement = "Pflicht"
+            elif parameter.get("required") is False:
+                requirement = "Optional"
+            else:
+                requirement = "Nicht angegeben"
+            print(f"  {index}. {param_name} ({type_label}, {requirement})")
+            if parameter.get("description"):
+                _print_wrapped(parameter["description"], indent="     ")
+            if "default" in parameter:
+                print(f"     Standardwert: {_human_value(parameter['default'])}")
+            if "choices" in parameter:
+                print(f"     Erlaubte Werte: {_human_value(parameter['choices'])}")
+            if index < len(parameters):
+                print()
+
+    known_fields = {
+        "schema_version", "title", "description", "category",
+        "inventory_required", "vault_required", "parameters",
+    }
+    extras = {key: value for key, value in metadata.items() if key not in known_fields}
+    if extras:
+        print("\nWeitere Metadaten")
+        print("-----------------")
+        for key, value in extras.items():
+            print(f"  {key}: {_human_value(value)}")
+
+    print()
     return 0
 
 
