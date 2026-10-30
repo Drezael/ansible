@@ -1,0 +1,13 @@
+# Runtime dependencies for launch.py in the Ansible repository root.
+# Python >= 3.12 (as required by launcher/pyproject.toml).
+
+# Provides the ansible-playbook CLI used by the launcher.
+# 2.21 is the current ansible-core release line used in this project.
+ansible-core>=2.21,<2.22
+
+# Match the runtime dependency ranges in launcher/pyproject.toml.
+cryptography>=42,<52
+bcrypt>=4,<6
+
+# Tests are optional and not included in production requirements.
+# Install separately: python3 -m pip install 'pytest>=8'
