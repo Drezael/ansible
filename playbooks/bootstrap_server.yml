@@ -1,6 +1,7 @@
 ---
 - name: bootstrap server
   hosts: "{{ hostname }}"
+  serial: 1
   remote_user: root
   become: false
   become_method: sudo
