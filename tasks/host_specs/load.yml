@@ -24,7 +24,8 @@
 - name: Load host specifications
   ansible.builtin.include_vars:
     file: "{{ host_specs_path }}"
-
+    name: host_specs
+    
 # ============================================================
 # Validate host specifications
 # ============================================================
