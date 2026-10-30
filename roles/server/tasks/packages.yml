@@ -1,0 +1,12 @@
+---
+# ============================================================
+# Install server packages
+# ============================================================
+
+- name: Install standard server packages
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/apt/install.yml"
+  vars:
+    apt_install_packages: "{{ host_packages }}"
+    packages_state: present
+  when: host_packages | length > 0

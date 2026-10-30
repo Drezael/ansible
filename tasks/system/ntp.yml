@@ -1,4 +1,3 @@
-
 ---
 # ============================================================
 # Validate Chrony configuration
@@ -60,6 +59,18 @@
   when: chrony_ubuntu_sources_file.stat.isreg | default(false)
 
 # ============================================================
+# Disable DHCP-provided NTP sources
+# ============================================================
+
+- name: Disable DHCP NTP sources
+  ansible.builtin.replace:
+    path: /etc/chrony/chrony.conf
+    regexp: '^([ \t]*sourcedir[ \t]+/run/chrony-dhcp(?:[ \t]+[^\r\n]*)?)$'
+    replace: '# Disabled by Ansible: \1'
+    backup: true
+  register: chrony_dhcp_sources
+
+# ============================================================
 # Configure Ansible NTP source
 # ============================================================
 
@@ -87,7 +98,7 @@
   changed_when: false
 
 # ============================================================
-# Disable conflicting time service
+# Disable conflicting time services
 # ============================================================
 
 - name: Gather service information
@@ -113,11 +124,12 @@
          chrony_source_directory.changed
          or chrony_default_sources.changed
          or (chrony_ubuntu_sources.changed | default(false))
+         or chrony_dhcp_sources.changed
          or chrony_ntp_configuration.changed
          else 'started' }}
 
 # ============================================================
-# Verify synchronization
+# Verify Chrony synchronization
 # ============================================================
 
 - name: Wait for Chrony synchronization
@@ -136,9 +148,14 @@
   register: chrony_tracking
   changed_when: false
 
+# ============================================================
+# Report Chrony status
+# ============================================================
+
 - name: Report Chrony configuration
   ansible.builtin.debug:
-    msg: >-
-      Chrony configured successfully.
-      NTP source: {{ server_ntp_server }}.
-      Synchronization verified.
+    msg:
+      - "Chrony configured successfully."
+      - "NTP source: {{ server_ntp_server }}"
+      - "Synchronization verified."
+      - "{{ chrony_tracking.stdout }}"

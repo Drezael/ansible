@@ -1,0 +1,16 @@
+---
+# ============================================================
+# Update APT package cache
+# ============================================================
+
+- name: Update APT package cache
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/apt/update_cache.yml"
+
+# ============================================================
+# Upgrade installed packages
+# ============================================================
+
+- name: Upgrade installed packages
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/apt/upgrade.yml"

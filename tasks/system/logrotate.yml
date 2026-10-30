@@ -12,25 +12,60 @@
     fail_msg: "Invalid Logrotate configuration."
 
 # ============================================================
-# Configure Logrotate
+# Remove obsolete Ansible policy block
 # ============================================================
 
-- name: Configure global Logrotate policy
+- name: Remove previous Ansible Logrotate policy block
   ansible.builtin.blockinfile:
     path: /etc/logrotate.conf
     marker: '# {mark} ANSIBLE MANAGED LOGROTATE POLICY'
-    insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
+    state: absent
     backup: true
-    block: |
-      {{ server_logrotate_frequency }}
-      rotate {{ server_logrotate_rotate | int }}
-      {{ 'compress' if server_logrotate_compress | bool else 'nocompress' }}
+
+# ============================================================
+# Configure rotation frequency
+# ============================================================
+
+- name: Configure Logrotate frequency
+  ansible.builtin.lineinfile:
+    path: /etc/logrotate.conf
+    regexp: '^[ \t]*(?:daily|weekly|monthly|yearly)[ \t]*$'
+    line: "{{ server_logrotate_frequency }}"
+    insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
+    state: present
+    backup: true
+
+# ============================================================
+# Configure rotation count
+# ============================================================
+
+- name: Configure Logrotate retention count
+  ansible.builtin.lineinfile:
+    path: /etc/logrotate.conf
+    regexp: '^[ \t]*rotate[ \t]+[0-9]+[ \t]*$'
+    line: "rotate {{ server_logrotate_rotate | int }}"
+    insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
+    state: present
+    backup: true
+
+# ============================================================
+# Configure compression
+# ============================================================
+
+- name: Configure Logrotate compression
+  ansible.builtin.lineinfile:
+    path: /etc/logrotate.conf
+    regexp: '^[ \t]*#?[ \t]*(?:compress|nocompress)[ \t]*$'
+    line: "{{ 'compress' if server_logrotate_compress | bool else 'nocompress' }}"
+    insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
+    state: present
+    backup: true
 
 # ============================================================
 # Enable Logrotate timer
 # ============================================================
 
-- name: Enable logrotate timer
+- name: Enable Logrotate timer
   ansible.builtin.systemd_service:
     name: logrotate.timer
     enabled: true
@@ -40,7 +75,7 @@
 # Validate Logrotate configuration
 # ============================================================
 
-- name: Validate logrotate configuration
+- name: Validate Logrotate configuration
   ansible.builtin.command:
     argv:
       - /usr/sbin/logrotate
@@ -52,7 +87,7 @@
 # Verify Logrotate timer
 # ============================================================
 
-- name: Verify logrotate timer
+- name: Verify Logrotate timer
   ansible.builtin.command:
     argv:
       - /usr/bin/systemctl
@@ -63,6 +98,10 @@
   failed_when: >-
     logrotate_timer_status.rc != 0
     or logrotate_timer_status.stdout | trim != 'enabled'
+
+# ============================================================
+# Report Logrotate configuration
+# ============================================================
 
 - name: Report Logrotate configuration
   ansible.builtin.debug:

@@ -1,0 +1,11 @@
+---
+# ============================================================
+# Reboot server if required
+# ============================================================
+
+- name: Reboot server if required
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/reboot.yml"
+  vars:
+    server_reboot_if_required: "{{ host_reboot_if_required }}"
+    server_reboot_timeout: "{{ host_reboot_timeout }}"

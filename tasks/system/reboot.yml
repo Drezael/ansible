@@ -1,14 +1,84 @@
 ---
-- name: Check if system reboot is required
+# ============================================================
+# Validate reboot configuration
+# ============================================================
+
+- name: Validate reboot configuration
+  ansible.builtin.assert:
+    that:
+      - server_reboot_if_required is boolean
+      - server_reboot_timeout | int > 0
+    fail_msg: >-
+      Invalid reboot configuration.
+      reboot_if_required must be a boolean
+      and reboot_timeout must be greater than zero.
+
+# ============================================================
+# Check reboot requirement
+# ============================================================
+
+- name: Check whether system reboot is required
   ansible.builtin.stat:
-    path: /var/run/reboot-required
+    path: /run/reboot-required
   register: system_reboot_required
+
+# ============================================================
+# Reboot system
+# ============================================================
 
 - name: Reboot system if required
   ansible.builtin.reboot:
     msg: "System reboot initiated by Ansible"
     connect_timeout: 15
-    reboot_timeout: 900
+    reboot_timeout: "{{ server_reboot_timeout | int }}"
     post_reboot_delay: 10
     test_command: /usr/bin/true
-  when: system_reboot_required.stat.exists
+  when:
+    - system_reboot_required.stat.exists
+    - server_reboot_if_required | bool
+
+# ============================================================
+# Refresh system facts
+# ============================================================
+
+- name: Refresh system facts after reboot
+  ansible.builtin.setup:
+  when:
+    - system_reboot_required.stat.exists
+    - server_reboot_if_required | bool
+
+# ============================================================
+# Verify reboot completed
+# ============================================================
+
+- name: Check reboot requirement after restart
+  ansible.builtin.stat:
+    path: /run/reboot-required
+  register: system_reboot_required_after
+  when:
+    - system_reboot_required.stat.exists
+    - server_reboot_if_required | bool
+
+- name: Verify reboot requirement is cleared
+  ansible.builtin.assert:
+    that:
+      - not system_reboot_required_after.stat.exists
+    fail_msg: >-
+      The system was rebooted but still reports
+      that another reboot is required.
+  when:
+    - system_reboot_required.stat.exists
+    - server_reboot_if_required | bool
+
+# ============================================================
+# Report pending reboot
+# ============================================================
+
+- name: Report pending reboot when disabled
+  ansible.builtin.debug:
+    msg: >-
+      System reboot is required but automatic
+      reboot is disabled.
+  when:
+    - system_reboot_required.stat.exists
+    - not (server_reboot_if_required | bool)

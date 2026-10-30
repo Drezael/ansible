@@ -1,4 +1,3 @@
-
 ---
 - name: Configure system timezone
   ansible.builtin.include_tasks:
