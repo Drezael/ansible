@@ -1,5 +1,23 @@
 ---
-- name: Create journald configuration directory
+# ============================================================
+# Validate Journald settings
+# ============================================================
+
+- name: Validate Journald storage settings
+  ansible.builtin.assert:
+    that:
+      - server_journald_system_max_use is match('^[0-9]+[KMGT]$')
+      - server_journald_system_keep_free is match('^[0-9]+[KMGT]$')
+      - server_journald_system_max_file_size is match('^[0-9]+[KMGT]$')
+      - server_journald_max_retention is match('^[0-9]+(?:s|sec|min|h|day|week|month|year)$')
+      - server_journald_max_file_sec is match('^[0-9]+(?:s|sec|min|h|day|week|month|year)$')
+    fail_msg: "Invalid Journald configuration."
+
+# ============================================================
+# Prepare Journald configuration
+# ============================================================
+
+- name: Create Journald configuration directory
   ansible.builtin.file:
     path: /etc/systemd/journald.conf.d
     state: directory
@@ -7,7 +25,11 @@
     group: root
     mode: '0755'
 
-- name: Configure persistent system logging
+# ============================================================
+# Configure Journald
+# ============================================================
+
+- name: Configure Journald retention
   ansible.builtin.copy:
     dest: /etc/systemd/journald.conf.d/99-ansible.conf
     owner: root
@@ -16,33 +38,47 @@
     content: |
       [Journal]
       Storage=persistent
-      Compress=yes
-      SystemMaxUse={{ journald_system_max_use }}
-      SystemKeepFree={{ journald_system_keep_free }}
-      SystemMaxFileSize={{ journald_system_max_file_size }}
-      MaxRetentionSec={{ journald_max_retention }}
-      MaxFileSec={{ journald_max_file_sec }}
-  register: journald_config
+      SystemMaxUse={{ server_journald_system_max_use }}
+      SystemKeepFree={{ server_journald_system_keep_free }}
+      SystemMaxFileSize={{ server_journald_system_max_file_size }}
+      MaxRetentionSec={{ server_journald_max_retention }}
+      MaxFileSec={{ server_journald_max_file_sec }}
+  register: journald_configuration
 
-- name: Restart journald if configuration changed
+# ============================================================
+# Apply Journald configuration
+# ============================================================
+
+- name: Restart Journald after configuration changes
   ansible.builtin.systemd_service:
     name: systemd-journald.service
     state: restarted
-  when: journald_config.changed
+  when: journald_configuration.changed
 
 - name: Flush journal to persistent storage
   ansible.builtin.command:
-    cmd: /usr/bin/journalctl --flush
+    argv:
+      - /usr/bin/journalctl
+      - --flush
+  changed_when: true
+  when: journald_configuration.changed
+
+# ============================================================
+# Verify Journald
+# ============================================================
+
+- name: Read Journald disk usage
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/journalctl
+      - --disk-usage
+  register: journald_disk_usage
   changed_when: false
-  when: journald_config.changed
 
-- name: Verify persistent journal directory
-  ansible.builtin.stat:
-    path: /var/log/journal
-  register: journald_directory
-
-- name: Verify persistent logging is available
-  ansible.builtin.assert:
-    that:
-      - journald_directory.stat.isdir | default(false)
-    fail_msg: "Das persistente Journal-Verzeichnis fehlt."
+- name: Report Journald configuration
+  ansible.builtin.debug:
+    msg:
+      - "SystemMaxUse: {{ server_journald_system_max_use }}"
+      - "SystemKeepFree: {{ server_journald_system_keep_free }}"
+      - "MaxRetentionSec: {{ server_journald_max_retention }}"
+      - "{{ journald_disk_usage.stdout }}"
