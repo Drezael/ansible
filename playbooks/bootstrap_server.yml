@@ -286,13 +286,18 @@
           }}
       no_log: true
 
+    # ============================================================
+    # Install Ansible service public key
+    # ============================================================
+
     - name: Install ansible service key
       ansible.builtin.include_tasks:
-        file: "{{ tasks_dir }}/ssh/install_public_key.yml"
+        file: "{{ tasks_dir }}/ssh/public_key.yml"
       vars:
-        user_name: "{{ service_user.user_name }}"
-        user_primary_group: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        ssh_user_name: "{{ service_user.user_name }}"
+        ssh_user_primary_group: "{{ service_user.primary_group | default(service_user.user_name) }}"
         key_name: "{{ inventory_hostname }}"
+        state: present
 
     - name: "Grant user {{ service_user.user_name }} sudo rights"
       ansible.builtin.include_tasks:
