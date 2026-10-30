@@ -8,4 +8,4 @@
   ansible.builtin.include_tasks: 
     file: "{{ roles_dir }}/server/tasks/hostname.yml"
   vars:
-    hostname: "{{ host_specs.hostname }}"
+    host_name: "{{ host_specs.hostname }}"
