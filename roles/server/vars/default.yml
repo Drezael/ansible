@@ -2,3 +2,8 @@
 locale: de_DE.UTF-8
 timezone: Europe/Berlin
 ntp_server: pool.ntp.org
+journald_system_max_use: 512M
+journald_system_keep_free: 1G
+journald_system_max_file_size: 64M
+journald_max_retention: 30day
+journald_max_file_sec: 1day
