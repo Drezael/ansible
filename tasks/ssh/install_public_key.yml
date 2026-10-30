@@ -1,13 +1,31 @@
+
 ---
+# ============================================================
+# Check SSH directory
+# ============================================================
+
+- name: Check SSH directory
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_user_name }}/.ssh"
+  register: ssh_directory_stat
+
+# ============================================================
+# Create SSH directory
+# ============================================================
 
 - name: Create SSH directory
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/system/create_directory.yml"
   vars:
     path: "/home/{{ ssh_user_name }}/.ssh"
-    owner: "{{ ssh_user_name }}"    
+    owner: "{{ ssh_user_name }}"
     owner_group: "{{ ssh_user_primary_group }}"
     mode: '0700'
+  when: not ssh_directory_stat.stat.exists
+
+# ============================================================
+# Install SSH public key
+# ============================================================
 
 - name: Install SSH public key
   ansible.builtin.copy:
