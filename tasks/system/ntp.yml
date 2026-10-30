@@ -1,7 +1,7 @@
 
 ---
 # ============================================================
-# Validate NTP configuration
+# Validate Chrony configuration
 # ============================================================
 
 - name: Validate NTP server
@@ -11,104 +11,134 @@
       - server_ntp_server | length > 0
       - server_ntp_server | length <= 253
       - server_ntp_server is match('^[A-Za-z0-9:][A-Za-z0-9._:-]*$')
-    fail_msg: >-
-      Ungueltiger NTP-Server.
-      Es muss ein einzelner Hostname oder eine IP-Adresse
-      ohne Leerzeichen angegeben werden.
+    fail_msg: "Invalid NTP server configuration."
 
 # ============================================================
-# Install NTP client
+# Prepare Chrony configuration
 # ============================================================
 
-- name: Install systemd-timesyncd
-  ansible.builtin.include_tasks:
-    file: "{{ tasks_dir }}/apt/install.yml"
-  vars:
-    apt_install_packages:
-      - systemd-timesyncd
-    packages_state: present
-
-# ============================================================
-# Prepare NTP configuration
-# ============================================================
-
-- name: Create timesyncd configuration directory
+- name: Ensure Chrony sources directory exists
   ansible.builtin.file:
-    path: /etc/systemd/timesyncd.conf.d
+    path: /etc/chrony/sources.d
     state: directory
     owner: root
     group: root
     mode: '0755'
 
+- name: Ensure Chrony loads custom NTP sources
+  ansible.builtin.lineinfile:
+    path: /etc/chrony/chrony.conf
+    regexp: '^[ \t]*#?[ \t]*sourcedir[ \t]+/etc/chrony/sources\.d[ \t]*$'
+    line: 'sourcedir /etc/chrony/sources.d'
+    state: present
+  register: chrony_source_directory
+
 # ============================================================
-# Configure NTP server
+# Disable default NTP sources
 # ============================================================
 
-- name: Configure systemd-timesyncd
+- name: Disable default NTP sources in chrony.conf
+  ansible.builtin.replace:
+    path: /etc/chrony/chrony.conf
+    regexp: '^([ \t]*(?:pool|server|peer)[ \t]+[^\r\n]+)$'
+    replace: '# Disabled by Ansible: \1'
+    backup: true
+  register: chrony_default_sources
+
+- name: Check Ubuntu default NTP source file
+  ansible.builtin.stat:
+    path: /etc/chrony/sources.d/ubuntu-ntp-pools.sources
+  register: chrony_ubuntu_sources_file
+
+- name: Disable Ubuntu default NTP source file
+  ansible.builtin.replace:
+    path: /etc/chrony/sources.d/ubuntu-ntp-pools.sources
+    regexp: '^([ \t]*(?:pool|server|peer)[ \t]+[^\r\n]+)$'
+    replace: '# Disabled by Ansible: \1'
+    backup: true
+  register: chrony_ubuntu_sources
+  when: chrony_ubuntu_sources_file.stat.isreg | default(false)
+
+# ============================================================
+# Configure Ansible NTP source
+# ============================================================
+
+- name: Configure Chrony NTP source
   ansible.builtin.copy:
-    dest: /etc/systemd/timesyncd.conf.d/99-ansible-ntp.conf
+    dest: /etc/chrony/sources.d/99-ansible.sources
     owner: root
     group: root
     mode: '0644'
     content: |
-      [Time]
-      NTP=
-      NTP={{ server_ntp_server }}
-  register: ntp_configuration
+      {{ 'pool' if server_ntp_server == 'pool.ntp.org' or server_ntp_server.endswith('.pool.ntp.org') else 'server' }} {{ server_ntp_server }} iburst
+  register: chrony_ntp_configuration
 
 # ============================================================
-# Enable and start NTP synchronization
+# Validate Chrony configuration
 # ============================================================
 
-- name: Enable and start systemd-timesyncd
+- name: Validate Chrony configuration syntax
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/chronyd
+      - -p
+      - -f
+      - /etc/chrony/chrony.conf
+  changed_when: false
+
+# ============================================================
+# Disable conflicting time service
+# ============================================================
+
+- name: Gather service information
+  ansible.builtin.service_facts:
+
+- name: Disable systemd-timesyncd if installed
   ansible.builtin.systemd_service:
     name: systemd-timesyncd.service
+    enabled: false
+    state: stopped
+  when: "'systemd-timesyncd.service' in ansible_facts.services"
+
+# ============================================================
+# Enable and start Chrony
+# ============================================================
+
+- name: Enable and start Chrony
+  ansible.builtin.systemd_service:
+    name: chrony.service
     enabled: true
-    state: "{{ 'restarted' if ntp_configuration.changed else 'started' }}"
+    state: >-
+      {{ 'restarted' if
+         chrony_source_directory.changed
+         or chrony_default_sources.changed
+         or (chrony_ubuntu_sources.changed | default(false))
+         or chrony_ntp_configuration.changed
+         else 'started' }}
 
 # ============================================================
-# Verify NTP service
+# Verify synchronization
 # ============================================================
 
-- name: Read NTP service status
+- name: Wait for Chrony synchronization
   ansible.builtin.command:
     argv:
-      - /usr/bin/timedatectl
-      - show
-      - --property=NTP
-      - --value
-  register: ntp_service_status
+      - /usr/bin/chronyc
+      - waitsync
+      - "12"
   changed_when: false
-  failed_when: >-
-    ntp_service_status.rc != 0
-    or ntp_service_status.stdout | trim != 'yes'
 
-# ============================================================
-# Verify system clock synchronization
-# ============================================================
-
-- name: Wait for system clock synchronization
+- name: Read Chrony tracking information
   ansible.builtin.command:
     argv:
-      - /usr/bin/timedatectl
-      - show
-      - --property=NTPSynchronized
-      - --value
-  register: ntp_sync_status
+      - /usr/bin/chronyc
+      - tracking
+  register: chrony_tracking
   changed_when: false
-  until:
-    - ntp_sync_status.rc == 0
-    - ntp_sync_status.stdout | trim == 'yes'
-  retries: 12
-  delay: 5
 
-# ============================================================
-# Report NTP status
-# ============================================================
-
-- name: Report configured NTP server
+- name: Report Chrony configuration
   ansible.builtin.debug:
     msg: >-
-      NTP-Konfiguration abgeschlossen.
-      Konfigurierter Server: {{ server_ntp_server }}.
-      Systemzeit ist synchronisiert.
+      Chrony configured successfully.
+      NTP source: {{ server_ntp_server }}.
+      Synchronization verified.
