@@ -69,8 +69,8 @@ def _path(raw: str, project_root: Path) -> Path:
     return (p if p.is_absolute() else project_root / p).resolve()
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def execute(args: argparse.Namespace) -> int:
+    """Execute an already parsed command without parsing it a second time."""
     try:
         config_file = resolve_config_path(args.config)
         cfg = load_config(config_file)
@@ -125,6 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Abbruch durch Benutzer.", file=sys.stderr)
         return 130
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Backwards-compatible standalone CLI for installed package users."""
+    return execute(build_parser().parse_args(argv))
 
 
 if __name__ == "__main__":
