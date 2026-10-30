@@ -15,4 +15,3 @@ base_packages:
   - chrony
   - locales
   - logrotate
-  - ufw
