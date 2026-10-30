@@ -74,7 +74,7 @@
     host_timezone: "{{ host_specs.timezone | default(default.timezone) }}"
 
 # ============================================================
-# Configure NTP
+# Configure Chrony
 # ============================================================
 
 - name: Configure NTP time synchronization
@@ -82,6 +82,32 @@
     file: "{{ roles_dir }}/server/tasks/ntp.yml"
   vars:
     host_ntp_server: "{{ host_specs.ntp_server | default(default.ntp_server) }}"
+
+# ============================================================
+# Configure Journald
+# ============================================================
+
+- name: Configure system journal
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/journald.yml"
+  vars:
+    host_journald_system_max_use: "{{ host_specs.journald_system_max_use | default(default.journald_system_max_use) }}"
+    host_journald_system_keep_free: "{{ host_specs.journald_system_keep_free | default(default.journald_system_keep_free) }}"
+    host_journald_system_max_file_size: "{{ host_specs.journald_system_max_file_size | default(default.journald_system_max_file_size) }}"
+    host_journald_max_retention: "{{ host_specs.journald_max_retention | default(default.journald_max_retention) }}"
+    host_journald_max_file_sec: "{{ host_specs.journald_max_file_sec | default(default.journald_max_file_sec) }}"
+
+# ============================================================
+# Configure Logrotate
+# ============================================================
+
+- name: Configure logrotate
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/logrotate.yml"
+  vars:
+    host_logrotate_frequency: "{{ host_specs.logrotate_frequency | default(default.logrotate_frequency) }}"
+    host_logrotate_rotate: "{{ host_specs.logrotate_rotate | default(default.logrotate_rotate) }}"
+    host_logrotate_compress: "{{ host_specs.logrotate_compress | default(default.logrotate_compress) }}"
 
 # ============================================================
 # Reboot if required
