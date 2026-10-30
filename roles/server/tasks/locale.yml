@@ -1,0 +1,7 @@
+
+---
+- name: Configure system locale
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/locale.yml"
+  vars:
+    server_locale: "{{ host_locale }}"
