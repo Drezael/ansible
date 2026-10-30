@@ -1,0 +1,161 @@
+
+---
+# Restore remote access before touching controller Vaults
+
+- name: Select credentials capable of restoring authorized_keys
+  ansible.builtin.set_fact:
+    ansible_private_key: >-
+      {{ rotation_new_private_key if (rotation_old_key_revocation_started | default(false)) else rotation_old_private_key }}
+    ansible_private_key_passphrase: >-
+      {{ generated_ssh_key_passphrase if (rotation_old_key_revocation_started | default(false)) else rotation_old_key_passphrase }}
+    ansible_become_password: >-
+      {{ generated_sudo_password if (rotation_sudo_change_started | default(false)) else rotation_old_sudo_password }}
+  no_log: true
+
+- name: Reset connection for remote recovery
+  ansible.builtin.meta: reset_connection
+
+- name: Restore original authorized_keys with sudo fallback
+  block:
+    - name: Restore authorized_keys using expected sudo password
+      ansible.builtin.copy:
+        dest: "{{ rotation_authorized_keys_path }}"
+        content: "{{ rotation_authorized_keys_before }}"
+        owner: "{{ service_user.user_name }}"
+        group: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        mode: '0600'
+      become: true
+      no_log: true
+
+  rescue:
+    - name: Switch to alternate sudo password for recovery
+      ansible.builtin.set_fact:
+        ansible_become_password: >-
+          {{ rotation_old_sudo_password if (rotation_sudo_change_started | default(false)) else generated_sudo_password }}
+      no_log: true
+
+    - name: Restore authorized_keys using alternate sudo password
+      ansible.builtin.copy:
+        dest: "{{ rotation_authorized_keys_path }}"
+        content: "{{ rotation_authorized_keys_before }}"
+        owner: "{{ service_user.user_name }}"
+        group: "{{ service_user.primary_group | default(service_user.user_name) }}"
+        mode: '0600'
+      become: true
+      no_log: true
+
+- name: Switch back to original private SSH key
+  ansible.builtin.set_fact:
+    ansible_private_key: "{{ rotation_old_private_key }}"
+    ansible_private_key_passphrase: "{{ rotation_old_key_passphrase }}"
+  no_log: true
+
+- name: Reset connection to original SSH key
+  ansible.builtin.meta: reset_connection
+
+- name: Restore previous sudo password if change was started
+  when: rotation_sudo_change_started | default(false)
+  block:
+    - name: Try sudo rollback with newly generated password
+      ansible.builtin.set_fact:
+        ansible_become_password: "{{ generated_sudo_password }}"
+      no_log: true
+
+    - name: Restore original Linux user password
+      ansible.builtin.user:
+        name: "{{ service_user.user_name }}"
+        password: >-
+          {{
+            rotation_old_sudo_password
+            | ansible.builtin.password_hash(
+                'sha512',
+                salt=rotation_old_sudo_salt,
+                rounds=100000
+              )
+          }}
+        update_password: always
+        password_lock: false
+      become: true
+      no_log: true
+
+  rescue:
+    - name: Retry sudo rollback with original password
+      ansible.builtin.set_fact:
+        ansible_become_password: "{{ rotation_old_sudo_password }}"
+      no_log: true
+
+    - name: Restore original Linux user password using old sudo credentials
+      ansible.builtin.user:
+        name: "{{ service_user.user_name }}"
+        password: >-
+          {{
+            rotation_old_sudo_password
+            | ansible.builtin.password_hash(
+                'sha512',
+                salt=rotation_old_sudo_salt,
+                rounds=100000
+              )
+          }}
+        update_password: always
+        password_lock: false
+      become: true
+      no_log: true
+
+- name: Set original sudo password for verification
+  ansible.builtin.set_fact:
+    ansible_become_password: "{{ rotation_old_sudo_password }}"
+  no_log: true
+
+- name: Reset SSH connection for original credentials test
+  ansible.builtin.meta: reset_connection
+
+- name: Wait for original SSH authentication
+  ansible.builtin.wait_for_connection:
+    connect_timeout: 5
+    sleep: 2
+    timeout: 40
+  become: false
+  register: rotation_rollback_connection
+  ignore_errors: true
+  ignore_unreachable: true
+
+- name: Assert original SSH connection is available
+  ansible.builtin.assert:
+    that:
+      - not (rotation_rollback_connection.failed | default(false))
+      - not (rotation_rollback_connection.unreachable | default(false))
+    fail_msg: >-
+      ROLLBACK FEHLGESCHLAGEN: alter SSH-Zugang nicht erreichbar.
+
+- name: Verify original SSH identity
+  ansible.builtin.command:
+    cmd: /usr/bin/id -un
+  register: rotation_rollback_ssh
+  changed_when: false
+  failed_when: >-
+    rotation_rollback_ssh.rc != 0 or
+    rotation_rollback_ssh.stdout | trim != service_user.user_name
+
+- name: Verify original sudo authentication
+  ansible.builtin.command:
+    cmd: /usr/bin/id -u
+  become: true
+  register: rotation_rollback_sudo
+  changed_when: false
+  failed_when: >-
+    rotation_rollback_sudo.rc != 0 or
+    rotation_rollback_sudo.stdout | trim != '0'
+  no_log: true
+
+- name: Read restored authorized_keys
+  ansible.builtin.slurp:
+    src: "{{ rotation_authorized_keys_path }}"
+  register: rotation_rollback_keys
+  no_log: true
+
+- name: Verify authorized_keys restored byte-for-byte
+  ansible.builtin.assert:
+    that:
+      - (rotation_rollback_keys.content | b64decode) == rotation_authorized_keys_before
+    fail_msg: >-
+      ROLLBACK FEHLGESCHLAGEN: authorized_keys weicht vom Original ab.
