@@ -2,7 +2,7 @@
 
 - name: Create SSH directory
   ansible.builtin.include_tasks:
-    file: "{{ tasks_dir }}/sytem/create_directory.yml"
+    file: "{{ tasks_dir }}/system/create_directory.yml"
   vars:
     path: "/home/{{ ssh_user_name }}/.ssh"
     owner: "{{ ssh_user_name }}"    
