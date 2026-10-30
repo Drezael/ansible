@@ -1,0 +1,6 @@
+---
+- name: Configure NTP time synchronization
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/ntp.yml"
+  vars:
+    server_ntp_server: "{{ host_ntp_server }}"
