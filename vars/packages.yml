@@ -3,7 +3,7 @@
 # Base packages for all Ubuntu servers
 # ============================================================
 
-base_packages:
+server_packages:
   - ca-certificates
   - curl
   - wget
@@ -15,3 +15,6 @@ base_packages:
   - chrony
   - locales
   - logrotate
+
+firewall_packages:
+  - ufw
