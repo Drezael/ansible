@@ -167,22 +167,6 @@
           }}
       no_log: true
 
-    - name: debug
-      ansible.builtin.debug:
-        msg: "{{ key_passphrases_vault }}"    
-
-    - name: debug
-      ansible.builtin.debug:
-        msg: "{{ vault_passwords_vault }}" 
-
-    - name: debug
-      ansible.builtin.debug:
-        msg: "{{ master_vault }}" 
-
-    - name: debug
-      ansible.builtin.debug:
-        msg: "{{ sudo_passwords_salts_vault }}" 
-
     - name: Configure bootstrap SSH connection
       ansible.builtin.include_tasks:
         file: "{{ tasks_dir }}/connection/configure.yml"
