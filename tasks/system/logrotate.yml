@@ -1,9 +1,44 @@
 ---
+# ============================================================
+# Validate Logrotate configuration
+# ============================================================
+
+- name: Validate Logrotate settings
+  ansible.builtin.assert:
+    that:
+      - server_logrotate_frequency in ['daily', 'weekly', 'monthly', 'yearly']
+      - server_logrotate_rotate | int >= 1
+      - server_logrotate_compress is boolean
+    fail_msg: "Invalid Logrotate configuration."
+
+# ============================================================
+# Configure Logrotate
+# ============================================================
+
+- name: Configure global Logrotate policy
+  ansible.builtin.blockinfile:
+    path: /etc/logrotate.conf
+    marker: '# {mark} ANSIBLE MANAGED LOGROTATE POLICY'
+    insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
+    backup: true
+    block: |
+      {{ server_logrotate_frequency }}
+      rotate {{ server_logrotate_rotate | int }}
+      {{ 'compress' if server_logrotate_compress | bool else 'nocompress' }}
+
+# ============================================================
+# Enable Logrotate timer
+# ============================================================
+
 - name: Enable logrotate timer
   ansible.builtin.systemd_service:
     name: logrotate.timer
     enabled: true
     state: started
+
+# ============================================================
+# Validate Logrotate configuration
+# ============================================================
 
 - name: Validate logrotate configuration
   ansible.builtin.command:
@@ -12,3 +47,26 @@
       - --debug
       - /etc/logrotate.conf
   changed_when: false
+
+# ============================================================
+# Verify Logrotate timer
+# ============================================================
+
+- name: Verify logrotate timer
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-enabled
+      - logrotate.timer
+  register: logrotate_timer_status
+  changed_when: false
+  failed_when: >-
+    logrotate_timer_status.rc != 0
+    or logrotate_timer_status.stdout | trim != 'enabled'
+
+- name: Report Logrotate configuration
+  ansible.builtin.debug:
+    msg:
+      - "Frequency: {{ server_logrotate_frequency }}"
+      - "Rotations: {{ server_logrotate_rotate }}"
+      - "Compression: {{ server_logrotate_compress }}"
