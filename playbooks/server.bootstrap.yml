@@ -1,3 +1,21 @@
+# ANSIBLE_LAUNCHER_METADATA_BEGIN
+# {
+#   "schema_version": 1,
+#   "title": "Server Bootstrap",
+#   "description": "Initialisiert einen frisch installierten Server, erstellt den Ansible-Service-Benutzer, konfiguriert SSH und sudo, generiert bei Bedarf Secrets und deaktiviert nach erfolgreicher Prüfung den direkten Root-SSH-Zugang.",
+#   "category": "server",
+#   "inventory_required": true,
+#   "vault_required": true,
+#   "parameters": [
+#     {
+#       "name": "hostname",
+#       "type": "string",
+#       "required": true,
+#       "description": "Hostname des zu initialisierenden Servers aus dem Inventory"
+#     }
+#   ]
+# }
+# ANSIBLE_LAUNCHER_METADATA_END
 ---
 - name: bootstrap server
   hosts: "{{ hostname }}"

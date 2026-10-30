@@ -1,3 +1,21 @@
+# ANSIBLE_LAUNCHER_METADATA_BEGIN
+# {
+#   "schema_version": 1,
+#   "title": "Server vorbereiten",
+#   "description": "Konfiguriert einen bereits gebootstrappten Server anhand seiner Host-Spezifikationen. Prüft den Bootstrap- und Secrets-Status, validiert die konfigurierten Rollen, überprüft SSH- und sudo-Zugriff und führt anschließend die definierten Serverrollen aus.",
+#   "category": "server",
+#   "inventory_required": true,
+#   "vault_required": true,
+#   "parameters": [
+#     {
+#       "name": "hostname",
+#       "type": "string",
+#       "required": true,
+#       "description": "Hostname des zu konfigurierenden Servers aus dem Inventory"
+#     }
+#   ]
+# }
+# ANSIBLE_LAUNCHER_METADATA_END
 ---
 # ============================================================
 # Validate playbook invocation

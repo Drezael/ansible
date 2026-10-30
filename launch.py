@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -22,6 +23,9 @@ LAUNCHER_DIRECTORY = REPOSITORY_ROOT / "launcher"
 VENV_PYTHON = LAUNCHER_DIRECTORY / ".venv" / "bin" / "python"
 PACKAGE_DIRECTORY = LAUNCHER_DIRECTORY / "src" / "ansible_launcher"
 MAX_ARGUMENT_BYTES = 16 * 1024 * 1024
+PLAYBOOK_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
+METADATA_BEGIN = "# ANSIBLE_LAUNCHER_METADATA_BEGIN"
+METADATA_END = "# ANSIBLE_LAUNCHER_METADATA_END"
 
 
 class _Termination(Exception):
@@ -31,6 +35,7 @@ class _Termination(Exception):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="launch.py",
+        allow_abbrev=False,
         description=(
             "Ansible-Playbooks und verschluesselte Inventories mit dem "
             "virtuellen Python-Environment unter launcher/.venv verwalten."
@@ -41,10 +46,16 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--project-root", help="Ansible-Projektverzeichnis (Standard: Verzeichnis von launch.py)")
     common.add_argument("--key", help="RSA-Private-Key (ueberschreibt die Home-Konfiguration)")
 
-    parser.add_argument(
+    metadata_actions = parser.add_mutually_exclusive_group()
+    metadata_actions.add_argument(
         "--playbooks-list",
         action="store_true",
         help="Alle verfuegbaren YAML-Playbooks unter playbooks/ anzeigen (ohne venv)",
+    )
+    metadata_actions.add_argument(
+        "--playbook-details",
+        metavar="NAME",
+        help="Metadaten eines Playbooks anzeigen, z. B. server.bootstrap (ohne venv)",
     )
     parser.epilog = (
         "Beispiel: python3 launch.py run server.prepare "
@@ -115,6 +126,92 @@ def _list_playbooks() -> int:
     print("Verfuegbare Playbooks (playbooks/):")
     for path in files:
         print(f"  {path.stem}")
+    return 0
+
+
+def _playbook_path(name: str) -> Path | None:
+    """Resolve an extensionless playbook name without allowing path traversal."""
+    if not PLAYBOOK_NAME_RE.fullmatch(name) or name.endswith((".yml", ".yaml")):
+        print(
+            "Fehler: Ungueltiger Playbookname. Bitte den Namen ohne "
+            "Dateiendung und ohne Verzeichnispfad angeben.",
+            file=sys.stderr,
+        )
+        return None
+
+    directory = REPOSITORY_ROOT / "playbooks"
+    if not directory.is_dir():
+        print(f"Fehler: Playbook-Verzeichnis fehlt: {directory}", file=sys.stderr)
+        return None
+
+    matches = [
+        path for suffix in (".yml", ".yaml")
+        if (path := directory / f"{name}{suffix}").is_file()
+        and not path.is_symlink()
+    ]
+    if not matches:
+        print(f"Fehler: Playbook nicht gefunden: {name}", file=sys.stderr)
+        return None
+    if len(matches) > 1:
+        print(
+            f"Fehler: Mehrdeutiger Playbookname '{name}': "
+            "sowohl .yml als auch .yaml vorhanden.",
+            file=sys.stderr,
+        )
+        return None
+    return matches[0]
+
+
+def _read_playbook_metadata(playbook: Path) -> dict:
+    """Read the JSON comment header without parsing or executing Ansible YAML."""
+    metadata_lines: list[str] = []
+    reading = False
+    try:
+        with playbook.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                stripped = line.strip()
+                if not reading:
+                    if stripped == METADATA_BEGIN:
+                        reading = True
+                    elif stripped and not stripped.startswith("#"):
+                        break  # Metadata must be in the leading comment header.
+                    continue
+
+                if stripped == METADATA_END:
+                    try:
+                        result = json.loads("\n".join(metadata_lines))
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(f"Ungueltiges JSON in den Metadaten: {exc}") from exc
+                    if not isinstance(result, dict):
+                        raise ValueError("Die Metadaten muessen ein JSON-Objekt sein.")
+                    return result
+
+                if not stripped.startswith("#"):
+                    raise ValueError("Metadaten-Header enthaelt eine Zeile ohne Kommentarzeichen (#).")
+                metadata_lines.append(stripped[1:].lstrip())
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Playbook konnte nicht gelesen werden: {exc}") from exc
+
+    if reading:
+        raise ValueError(f"Metadaten-Header unvollstaendig: {METADATA_END} fehlt.")
+    raise ValueError("Kein Metadaten-Header im Playbook gefunden.")
+
+
+def _show_playbook_detail(name: str) -> int:
+    """Show the full parsed metadata for one playbook, without a venv."""
+    playbook = _playbook_path(name)
+    if playbook is None:
+        return 2
+    try:
+        metadata = _read_playbook_metadata(playbook)
+    except ValueError as exc:
+        print(f"Fehler in playbooks/{playbook.name}: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Playbook: {name}")
+    print(f"Datei: playbooks/{playbook.name}")
+    print("Metadaten:")
+    print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -242,10 +339,12 @@ def _run_in_venv(arguments: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.playbooks_list:
+    if args.playbooks_list or args.playbook_details is not None:
         if args.command is not None:
-            parser.error("--playbooks-list kann nicht mit einem Unterbefehl kombiniert werden.")
-        return _list_playbooks()
+            parser.error("--playbooks-list und --playbook-details sind nicht mit Unterbefehlen kombinierbar.")
+        if args.playbooks_list:
+            return _list_playbooks()
+        return _show_playbook_detail(args.playbook_details)
     if args.command is None:
         if not sys.stdin.isatty():
             parser.print_help()
