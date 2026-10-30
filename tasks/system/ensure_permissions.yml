@@ -1,0 +1,13 @@
+
+---
+# ============================================================
+# Ensure file or directory permissions
+# ============================================================
+
+- name: Ensure file or directory permissions
+  ansible.builtin.file:
+    path: "{{ path }}"
+    owner: "{{ owner }}"
+    group: "{{ owner_group }}"
+    mode: "{{ mode }}"
+    follow: false
