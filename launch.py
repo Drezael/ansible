@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Central Ansible launcher: parse arguments with the standard library.
 
@@ -40,7 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--project-root", help="Ansible-Projektverzeichnis (Standard: Verzeichnis von launch.py)")
     common.add_argument("--key", help="RSA-Private-Key (ueberschreibt die Home-Konfiguration)")
 
-    parser.epilog = "Beispiel: python3 launch.py run prepare_server --inventory dev --hostname test-host"
+    parser.add_argument(
+        "--playbooks-list",
+        action="store_true",
+        help="Alle verfuegbaren YAML-Playbooks unter playbooks/ anzeigen (ohne venv)",
+    )
+    parser.epilog = (
+        "Beispiel: python3 launch.py run server.prepare "
+        "--inventory dev --hostname test-host"
+    )
     commands = parser.add_subparsers(dest="command")
 
     commands.add_parser("menu", parents=[common], help="Interaktive Verwaltung starten")
@@ -67,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     decrypt.add_argument("--force", action="store_true")
 
     run = commands.add_parser("run", parents=[common], help="Playbook ausfuehren")
-    run.add_argument("playbook", help="Playbookname ohne .yml, z. B. prepare_server")
+    run.add_argument("playbook", help="Playbookname ohne Dateiendung, z. B. server.prepare")
     run.add_argument("--inventory", required=True, help="Verschluesseltes Inventory, z. B. dev")
     run.add_argument("--hostname", help="Zielhost fuer -e hostname=...")
     run.add_argument("-e", "--extra-var", action="append", default=[], help="Weitere Ansible-Variable (mehrfach moeglich)")
@@ -81,6 +90,32 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--temp-dir", help="Temporäres Verzeichnis (Standard: tmpfs)")
     run.add_argument("--allow-disk-temp", action="store_true", help="Unsicheren Datentraeger als Zwischenspeicher zulassen")
     return parser
+
+
+def _list_playbooks() -> int:
+    """List YAML playbooks without loading secrets, venv or Ansible modules."""
+    playbook_dir = REPOSITORY_ROOT / "playbooks"
+    if not playbook_dir.is_dir():
+        print(f"Fehler: Playbook-Verzeichnis fehlt: {playbook_dir}", file=sys.stderr)
+        return 2
+    try:
+        files = sorted(
+            (
+                path for path in playbook_dir.iterdir()
+                if path.is_file() and path.suffix in (".yml", ".yaml")
+            ),
+            key=lambda path: (path.name.casefold(), path.name),
+        )
+    except OSError as exc:
+        print(f"Fehler beim Lesen von {playbook_dir}: {exc}", file=sys.stderr)
+        return 2
+    if not files:
+        print("Keine Playbooks im Verzeichnis playbooks/ gefunden.")
+        return 0
+    print("Verfuegbare Playbooks (playbooks/):")
+    for path in files:
+        print(f"  {path.stem}")
+    return 0
 
 
 def _venv_ready() -> bool:
@@ -207,6 +242,10 @@ def _run_in_venv(arguments: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.playbooks_list:
+        if args.command is not None:
+            parser.error("--playbooks-list kann nicht mit einem Unterbefehl kombiniert werden.")
+        return _list_playbooks()
     if args.command is None:
         if not sys.stdin.isatty():
             parser.print_help()

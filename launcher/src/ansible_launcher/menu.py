@@ -14,6 +14,7 @@ from .config import LauncherConfig, load_config, resolve_config_path, resolve_pr
 from .errors import LauncherError
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+PLAYBOOK_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
 
 
 def show_status(
@@ -109,8 +110,12 @@ class InteractiveMenu:
 
     def _playbook(self) -> None:
         names = sorted(
-            p.stem for p in (self.root / "playbooks").glob("*.yml")
-            if NAME_RE.fullmatch(p.stem)
+            {
+                p.stem for p in (self.root / "playbooks").glob("*")
+                if p.is_file()
+                and p.suffix in (".yml", ".yaml")
+                and PLAYBOOK_NAME_RE.fullmatch(p.stem)
+            }
         )
         playbook = self._choose("Playbooks", names)
         if playbook is None:

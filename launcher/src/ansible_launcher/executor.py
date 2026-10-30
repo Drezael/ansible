@@ -1,3 +1,4 @@
+
 """Ansible execution with temporary plaintext files and propagated env for nested plays."""
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from .files import decrypt_file
 from .temporary import SecretWorkspace, select_temp_base
 
 NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+PLAYBOOK_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
 
 
 class _SignalStop(Exception):
@@ -97,13 +99,18 @@ def run_playbook(
     forks: int | None, verbose: int,
     temp_dir: str | None, allow_disk_temp: bool,
 ) -> int:
-    if not NAME_RE.fullmatch(playbook_name):
+    if not PLAYBOOK_NAME_RE.fullmatch(playbook_name):
         raise LauncherError("Playbookname ungültig (nur Dateiname ohne .yml).")
     if not NAME_RE.fullmatch(inventory_name):
         raise LauncherError("Inventoryname ungültig (z. B. dev).")
-    playbook = project_root / "playbooks" / f"{playbook_name}.yml"
-    if not playbook.is_file():
-        raise LauncherError(f"Playbook nicht gefunden: {playbook}")
+    playbooks_dir = project_root / "playbooks"
+    candidates = [playbooks_dir / f"{playbook_name}{suffix}" for suffix in (".yml", ".yaml")]
+    matches = [candidate for candidate in candidates if candidate.is_file()]
+    if not matches:
+        raise LauncherError(f"Playbook nicht gefunden: {playbook_name} (.yml/.yaml)")
+    if len(matches) > 1:
+        raise LauncherError(f"Mehrdeutiger Playbookname: {playbook_name} (.yml und .yaml vorhanden)")
+    playbook = matches[0]
     inventory_encrypted = cfg.inventory_path(inventory_name, project_root)
     if not inventory_encrypted.is_file():
         raise LauncherError(f"Verschlüsseltes Inventory nicht gefunden: {inventory_encrypted}")
