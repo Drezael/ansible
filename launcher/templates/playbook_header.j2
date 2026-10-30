@@ -1,0 +1,20 @@
+# ANSIBLE_LAUNCHER_METADATA_BEGIN
+# {
+#   "schema_version": 1,
+#   "title": {{ title | tojson }},
+#   "description": {{ description | tojson }},
+#   "category": {{ category | tojson }},
+#   "inventory_required": {{ inventory_required | tojson }},
+#   "vault_required": {{ vault_required | tojson }},
+#   "parameters": [
+{% for parameter in parameters | default([]) -%}
+#     {
+#       "name": {{ parameter.name | tojson }},
+#       "type": {{ parameter.type | tojson }},
+#       "required": {{ parameter.required | tojson }},
+#       "description": {{ parameter.description | tojson }}
+#     }{{ "," if not loop.last else "" }}
+{% endfor -%}
+#   ]
+# }
+# ANSIBLE_LAUNCHER_METADATA_END
