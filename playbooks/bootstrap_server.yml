@@ -348,9 +348,8 @@
     - name: Mark bootstrap as completed
       ansible.builtin.lineinfile:
         path: "{{ host_specs_file }}"
-        regexp: '^  bootstrap:'
-        insertafter: '^host_specs:$'
-        line: '  bootstrap: true'
+        regexp: '^bootstrap:'
+        line: 'bootstrap: true'
         state: present
         create: false
       delegate_to: localhost
