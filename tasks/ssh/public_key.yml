@@ -58,11 +58,12 @@
 # ============================================================
 
 - name: Ensure existing SSH directory permissions
-  ansible.builtin.file:
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/ensure_permissions.yml"
+  vars:
     path: "/home/{{ ssh_user_name }}/.ssh"
-    state: directory
     owner: "{{ ssh_user_name }}"
-    group: "{{ ssh_user_primary_group }}"
+    owner_group: "{{ ssh_user_primary_group }}"
     mode: '0700'
   when:
     - (state | default('present')) == 'present'
@@ -107,11 +108,12 @@
 # ============================================================
 
 - name: Ensure authorized_keys permissions
-  ansible.builtin.file:
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/ensure_permissions.yml"
+  vars:
     path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
-    state: file
     owner: "{{ ssh_user_name }}"
-    group: "{{ ssh_user_primary_group }}"
+    owner_group: "{{ ssh_user_primary_group }}"
     mode: '0600'
   when: (state | default('present')) == 'present'
 
