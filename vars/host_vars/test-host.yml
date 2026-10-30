@@ -1,6 +1,7 @@
 ---
 
-bootstrap: true
+bootstrap: false
+secrets: false
 hostname: test-host
 domain: leikam-barz.de
 users:
