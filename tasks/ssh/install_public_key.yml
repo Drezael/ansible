@@ -2,16 +2,17 @@
 
 - name: Create SSH directory
   ansible.builtin.include_tasks:
-    file: "{{ tasks_dir }}/ssh/create_directory.yml"
+    file: "{{ tasks_dir }}/sytem/create_directory.yml"
   vars:
-    owner: "{{ user_name }}"    
-    owner_group: "{{ user_primary_group }}"
+    path: "/home/{{ ssh_user_name }}/.ssh"
+    owner: "{{ ssh_user_name }}"    
+    owner_group: "{{ ssh_user_primary_group }}"
     mode: '0700'
 
 - name: Install SSH public key
   ansible.builtin.copy:
     src: "{{ public_keys_dir }}/{{ key_name }}.pub"
-    dest: "/home/{{ user_name }}/.ssh/authorized_keys"
-    owner: "{{ user_name }}"
-    group: "{{ user_primary_group }}"
+    dest: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
     mode: '0600'
