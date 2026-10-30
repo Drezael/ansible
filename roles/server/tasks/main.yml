@@ -1,15 +1,50 @@
 
 ---
+# ============================================================
+# Load variables
+# ============================================================
+
 - name: Load default variables
   ansible.builtin.include_vars:
     file: "{{ roles_dir }}/server/vars/default.yml"
     name: default
+
+- name: Load package definitions
+  ansible.builtin.include_vars:
+    file: "{{ vars_dir }}/packages.yml"
+    name: package_definitions
+
+# ============================================================
+# Update system
+# ============================================================
+
+- name: Update system packages
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/update.yml"
+
+# ============================================================
+# Install standard packages
+# ============================================================
+
+- name: Install standard server packages
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/packages.yml"
+  vars:
+    host_packages: "{{ package_definitions.server_packages }}"
+
+# ============================================================
+# Configure hostname
+# ============================================================
 
 - name: Configure hostname
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/hostname.yml"
   vars:
     host_name: "{{ host_specs.hostname }}"
+
+# ============================================================
+# Configure local hosts
+# ============================================================
 
 - name: Configure local hosts
   ansible.builtin.include_tasks:
@@ -18,11 +53,19 @@
     host_name: "{{ host_specs.hostname }}"
     host_domain: "{{ host_specs.domain }}"
 
+# ============================================================
+# Configure locale
+# ============================================================
+
 - name: Configure system locale
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/locale.yml"
   vars:
     host_locale: "{{ host_specs.locale | default(default.locale) }}"
+
+# ============================================================
+# Configure timezone
+# ============================================================
 
 - name: Configure system timezone
   ansible.builtin.include_tasks:
@@ -30,8 +73,23 @@
   vars:
     host_timezone: "{{ host_specs.timezone | default(default.timezone) }}"
 
+# ============================================================
+# Configure NTP
+# ============================================================
+
 - name: Configure NTP time synchronization
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/ntp.yml"
   vars:
     host_ntp_server: "{{ host_specs.ntp_server | default(default.ntp_server) }}"
+
+# ============================================================
+# Reboot if required
+# ============================================================
+
+- name: Reboot server if required
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/reboot.yml"
+  vars:
+    host_reboot_if_required: "{{ host_specs.reboot_if_required | default(default.reboot_if_required) }}"
+    host_reboot_timeout: "{{ host_specs.reboot_timeout | default(default.reboot_timeout) }}"
