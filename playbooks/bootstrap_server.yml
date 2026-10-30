@@ -23,21 +23,18 @@
           - hostname | default('') is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
         fail_msg: "Bitte einen gültigen Hostnamen über -e hostname=<hostname> übergeben."
 
-    - name: Check host specification file
-      ansible.builtin.stat:
-        path: "{{ host_specs_file }}"
-      register: host_specs_file_stat
-      delegate_to: localhost
-
-    - name: Verify host specification file exists
-      ansible.builtin.assert:
-        that:
-          - host_specs_file_stat.stat.isreg | default(false)
-        fail_msg: "Die Serverdefinition {{ host_specs_file }} existiert nicht."
+    # ============================================================
+    # Load host specifications
+    # ============================================================
 
     - name: Load host specifications
-      ansible.builtin.include_vars:
-        file: "{{ host_specs_file }}"
+      ansible.builtin.include_tasks:
+        file: "{{ tasks_dir }}/host_specs/load.yml"
+        apply:
+          become: false
+      vars:
+        host_specs_path: "{{ host_specs_file }}"
+        host_specs_expected_hostname: "{{ hostname }}"  
 
     - name: debug
       ansible.builtin.debug:
