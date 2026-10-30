@@ -232,7 +232,7 @@
             sudo_passwords_vault[inventory_hostname]
             | ansible.builtin.password_hash(
                 'sha512',
-                salt=sudo_passwords_salts_vault[hostname],
+                salt=sudo_passwords_salts_vault[inventory_hostname],
                 rounds=100000
               )
           }}
