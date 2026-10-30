@@ -1,0 +1,208 @@
+
+---
+# ============================================================
+# Validate parameters
+# ============================================================
+
+- name: Validate SSH public key parameters
+  ansible.builtin.assert:
+    that:
+      - (state | default('present')) in ['present', 'absent']
+      - ssh_user_name | default('') | string | length > 0
+      - ssh_user_primary_group | default('') | string | length > 0
+      - >-
+        (ssh_public_key | default('') | trim | length > 0)
+        or (key_name | default('') | trim | length > 0)
+    fail_msg: >-
+      Ungueltige SSH-Key-Parameter.
+      ssh_user_name, ssh_user_primary_group und
+      entweder ssh_public_key oder key_name muessen
+      definiert sein. state muss present
+      oder absent sein.
+
+# ============================================================
+# Check SSH directory
+# ============================================================
+
+- name: Check SSH directory
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_user_name }}/.ssh"
+  register: ssh_directory_stat
+
+- name: Verify SSH directory type
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ssh_directory_stat.stat.exists
+        or (ssh_directory_stat.stat.isdir | default(false))
+    fail_msg: >-
+      Der SSH-Pfad existiert, ist jedoch kein Verzeichnis.
+
+# ============================================================
+# Create SSH directory
+# ============================================================
+
+- name: Create SSH directory
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/create_directory.yml"
+  vars:
+    path: "/home/{{ ssh_user_name }}/.ssh"
+    owner: "{{ ssh_user_name }}"
+    owner_group: "{{ ssh_user_primary_group }}"
+    mode: '0700'
+  when:
+    - (state | default('present')) == 'present'
+    - not ssh_directory_stat.stat.exists
+
+# ============================================================
+# Check authorized_keys file
+# ============================================================
+
+- name: Check authorized_keys file
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+  register: ssh_authorized_keys_stat
+
+- name: Verify authorized_keys file type
+  ansible.builtin.assert:
+    that:
+      - >-
+        not ssh_authorized_keys_stat.stat.exists
+        or (ssh_authorized_keys_stat.stat.isreg | default(false))
+    fail_msg: >-
+      authorized_keys existiert, ist jedoch keine
+      regulaere Datei.
+
+# ============================================================
+# Create authorized_keys file
+# ============================================================
+
+- name: Create authorized_keys file
+  ansible.builtin.file:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    state: touch
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
+    mode: '0600'
+  when:
+    - (state | default('present')) == 'present'
+    - not ssh_authorized_keys_stat.stat.exists
+
+# ============================================================
+# Ensure authorized_keys permissions
+# ============================================================
+
+- name: Ensure authorized_keys permissions
+  ansible.builtin.file:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    state: file
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
+    mode: '0600'
+  when: (state | default('present')) == 'present'
+
+# ============================================================
+# Resolve public key
+# ============================================================
+
+- name: Resolve SSH public key
+  ansible.builtin.set_fact:
+    ssh_public_key_line: >-
+      {{
+        (
+          ssh_public_key
+          if (ssh_public_key | default('') | trim | length > 0)
+          else lookup(
+            'ansible.builtin.file',
+            public_keys_dir ~ '/' ~ key_name ~ '.pub'
+          )
+        ) | trim
+      }}
+  when: >-
+    (state | default('present')) == 'present'
+    or (ssh_authorized_keys_stat.stat.isreg | default(false))
+
+# ============================================================
+# Validate public key format
+# ============================================================
+
+- name: Verify SSH public key format
+  ansible.builtin.assert:
+    that:
+      - ssh_public_key_line.splitlines() | length == 1
+      - >-
+        ssh_public_key_line.split() | length >= 2
+        and ssh_public_key_line.split()[0] is match('^(ssh-|ecdsa-|sk-)')
+        and ssh_public_key_line.split()[1] is match('^[A-Za-z0-9+/]+={0,3}$')
+    fail_msg: >-
+      Der Public Key muss aus genau einer Zeile
+      mit SSH-Key-Typ und Base64-Key bestehen.
+  when: >-
+    (state | default('present')) == 'present'
+    or (ssh_authorized_keys_stat.stat.isreg | default(false))
+
+# ============================================================
+# Build public key identity pattern
+# ============================================================
+
+- name: Build SSH public key identity pattern
+  ansible.builtin.set_fact:
+    ssh_public_key_identity_regexp: >-
+      {{
+        '^[ \t]*(?!#)(?:(?:[^\s"]|"[^"]*")+[ \t]+)?'
+        ~ (ssh_public_key_line.split()[0] | regex_escape)
+        ~ '[ \t]+'
+        ~ (ssh_public_key_line.split()[1] | regex_escape)
+        ~ '(?:[ \t]|$)'
+      }}
+  when: >-
+    (state | default('present')) == 'present'
+    or (ssh_authorized_keys_stat.stat.isreg | default(false))
+
+# ============================================================
+# Read existing authorized_keys
+# ============================================================
+
+- name: Read authorized_keys file
+  ansible.builtin.slurp:
+    src: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+  register: ssh_authorized_keys_content
+  when: (state | default('present')) == 'present'
+
+# ============================================================
+# Install public key
+# ============================================================
+
+- name: Install SSH public key
+  ansible.builtin.lineinfile:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    line: "{{ ssh_public_key_line }}"
+    state: present
+    insertafter: EOF
+    create: false
+    owner: "{{ ssh_user_name }}"
+    group: "{{ ssh_user_primary_group }}"
+    mode: '0600'
+  when:
+    - (state | default('present')) == 'present'
+    - >-
+      (
+        (ssh_authorized_keys_content.content | b64decode).splitlines()
+        | select('match', ssh_public_key_identity_regexp)
+        | list
+        | length
+      ) == 0
+
+# ============================================================
+# Remove public key
+# ============================================================
+
+- name: Remove SSH public key
+  ansible.builtin.lineinfile:
+    path: "/home/{{ ssh_user_name }}/.ssh/authorized_keys"
+    regexp: "{{ ssh_public_key_identity_regexp }}"
+    state: absent
+    create: false
+  when:
+    - (state | default('present')) == 'absent'
+    - ssh_authorized_keys_stat.stat.isreg | default(false)
