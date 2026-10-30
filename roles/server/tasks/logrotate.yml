@@ -1,0 +1,8 @@
+---
+- name: Configure logrotate
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/logrotate.yml"
+  vars:
+    server_logrotate_frequency: "{{ host_logrotate_frequency }}"
+    server_logrotate_rotate: "{{ host_logrotate_rotate }}"
+    server_logrotate_compress: "{{ host_logrotate_compress }}"
