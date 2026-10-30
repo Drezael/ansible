@@ -1,10 +1,11 @@
 ---
+
 - name: Create SSH directory
-  ansible.builtin.file:
-    path: "/home/{{ user_name }}/.ssh"
-    state: directory
-    owner: "{{ user_name }}"
-    group: "{{ user_primary_group }}"
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ssh/create_directory.yml"
+  vars:
+    owner: "{{ user_name }}"    
+    owner_group: "{{ user_primary_group }}"
     mode: '0700'
 
 - name: Install SSH public key
