@@ -1,0 +1,7 @@
+
+---
+- name: Configure system timezone
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/timezone.yml"
+  vars:
+    server_timezone: "{{ host_timezone }}"
