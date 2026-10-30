@@ -1,0 +1,7 @@
+# Kopieren nach ~/.config/ansible-launcher/config.toml, Rechte 0600
+# Pfade an dein System anpassen.
+[launcher]
+project_root = "/home/USER/ansible"
+key_file = "/home/USER/.ssh/id_rsa"
+inventory_dir = "inventory"
+master_password_file = "vaults/master-password.enc"

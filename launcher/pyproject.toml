@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ansible-launcher"
+version = "0.1.0"
+description = "RSA/AES-protected inventory and vault-password runner for ansible-core"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["cryptography>=42,<52", "bcrypt>=4,<6"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+ansible-launcher = "ansible_launcher.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
