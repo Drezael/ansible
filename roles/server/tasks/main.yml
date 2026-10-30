@@ -17,3 +17,9 @@
   vars:
     host_name: "{{ host_specs.hostname }}"
     host_domain: "{{ host_specs.domain }}"
+
+- name: Configure system locale
+  ansible.builtin.include_tasks:
+    file: "{{ roles_dir }}/server/tasks/locale.yml"
+  vars:
+    host_locale: "{{ host_specs.locale | default(default.locale) }}"
