@@ -1,0 +1,8 @@
+---
+- name: Create SSH directory
+  ansible.builtin.file:
+    path: "/home/{{ owner }}/.ssh"
+    state: directory
+    owner: "{{ owner }}"
+    group: "{{ owner_group }}"
+    mode: "{{ mode }}"
