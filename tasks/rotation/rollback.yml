@@ -1,0 +1,140 @@
+
+---
+# ============================================================
+# Restore original remote credentials if server was modified
+# ============================================================
+
+- name: Restore original remote credentials
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/rotation/rollback_remote.yml"
+  when: rotation_remote_changes_started | default(false)
+
+# ============================================================
+# Restore encrypted controller files from the attempt backup
+# ============================================================
+
+- name: Restore original encrypted Vaults and public key
+  ansible.builtin.copy:
+    src: "{{ rotation_attempt_backup_dir }}/{{ item.name }}"
+    dest: "{{ item.source }}"
+    remote_src: true
+    mode: "{{ '0644' if item.name == 'public_key.pub' else '0600' }}"
+  delegate_to: localhost
+  become: false
+  loop: "{{ rotation_backup_files }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+- name: Check restored controller file checksums
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  loop: "{{ rotation_backup_files }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: rotation_restored_files
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+- name: Check original backup file checksums
+  ansible.builtin.stat:
+    path: "{{ rotation_attempt_backup_dir }}/{{ item.name }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  loop: "{{ rotation_backup_files }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: rotation_original_files
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+- name: Verify all controller files restored byte-for-byte
+  ansible.builtin.assert:
+    that:
+      - >-
+        (rotation_restored_files.results | map(attribute='stat.checksum') | list)
+        ==
+        (rotation_original_files.results | map(attribute='stat.checksum') | list)
+    fail_msg: >-
+      ROLLBACK FEHLGESCHLAGEN: lokale Vault-Dateien weichen vom Backup ab.
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+# ============================================================
+# Verify fresh access from restored Vaults, not cached values
+# ============================================================
+
+- name: Reload restored Vaults from disk
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/vault/load.yml"
+    apply:
+      become: false
+  loop: "{{ rotation_vaults }}"
+  loop_control:
+    loop_var: rotation_vault
+    label: "{{ rotation_vault.file | basename }}"
+  vars:
+    vault_load_file: "{{ rotation_vault.file }}"
+    vault_load_id: "{{ rotation_vault.id }}"
+    vault_load_password: "{{ rotation_vault.password }}"
+    vault_load_key: "{{ rotation_vault.key }}"
+    vault_load_fact: "{{ rotation_vault.fact }}"
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+- name: Verify restored host secrets match the original values
+  ansible.builtin.assert:
+    that:
+      - sudo_passwords_vault[inventory_hostname] == rotation_old_sudo_password
+      - sudo_passwords_salts_vault[inventory_hostname] == rotation_old_sudo_salt
+      - key_passphrases_vault[inventory_hostname] == rotation_old_key_passphrase
+      - vault_passwords_vault[inventory_hostname] == rotation_old_key_vault_password
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+- name: Reconfigure connection from restored Vaults
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/connection/configure.yml"
+    apply:
+      become: false
+  vars:
+    connection_user: "{{ service_user.user_name }}"
+    connection_key_name: "{{ inventory_hostname }}"
+    connection_sudo_key: "{{ inventory_hostname }}"
+  when: rotation_remote_changes_started | default(false)
+
+- name: Verify SSH connection from restored Vaults
+  ansible.builtin.command:
+    cmd: /usr/bin/id -un
+  register: rotation_reloaded_ssh
+  changed_when: false
+  failed_when: >-
+    rotation_reloaded_ssh.rc != 0 or
+    rotation_reloaded_ssh.stdout | trim != service_user.user_name
+  when: rotation_remote_changes_started | default(false)
+
+- name: Verify sudo connection from restored Vaults
+  ansible.builtin.command:
+    cmd: /usr/bin/id -u
+  become: true
+  register: rotation_reloaded_sudo
+  changed_when: false
+  failed_when: >-
+    rotation_reloaded_sudo.rc != 0 or
+    rotation_reloaded_sudo.stdout | trim != '0'
+  when: rotation_remote_changes_started | default(false)
+  no_log: true
+
+# ============================================================
+# Permit a new attempt only after verified recovery
+# ============================================================
+
+- name: Mark rollback verified and allow a new attempt
+  ansible.builtin.set_fact:
+    rotation_rollback_verified: true
+    rotation_lock_safe_to_release: true
