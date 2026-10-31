@@ -24,6 +24,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent
 LAUNCHER_DIRECTORY = REPOSITORY_ROOT / "launcher"
 VENV_PYTHON = LAUNCHER_DIRECTORY / ".venv" / "bin" / "python"
 PACKAGE_DIRECTORY = LAUNCHER_DIRECTORY / "src" / "ansible_launcher"
+ENCRYPTION_FILES_PATH = LAUNCHER_DIRECTORY / "encryption-files.txt"
 MAX_ARGUMENT_BYTES = 16 * 1024 * 1024
 PLAYBOOK_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
 METADATA_BEGIN = "# ANSIBLE_LAUNCHER_METADATA_BEGIN"
@@ -103,6 +104,33 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--temp-dir", help="Temporäres Verzeichnis (Standard: tmpfs)")
     run.add_argument("--allow-disk-temp", action="store_true", help="Unsicheren Datentraeger als Zwischenspeicher zulassen")
     return parser
+
+
+def _load_encryption_file_list() -> list[str]:
+    """Load repo-relative file paths, one per line, without touching those files."""
+    try:
+        if ENCRYPTION_FILES_PATH.stat().st_size > 1024 * 1024:
+            raise ValueError("Dateiliste ist groesser als 1 MiB.")
+        lines = ENCRYPTION_FILES_PATH.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Dateiliste konnte nicht geladen werden: {exc}") from exc
+
+    files: list[str] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(lines, start=1):
+        path = line.strip()
+        if not path or path.startswith("#"):
+            continue
+        if (
+            path.startswith("/") or "\\" in path or "\x00" in path
+            or any(part in ("", ".", "..") for part in path.split("/"))
+        ):
+            raise ValueError(f"Zeile {line_number}: Ungueltiger relativer Pfad: {path!r}.")
+        if path in seen:
+            raise ValueError(f"Zeile {line_number}: Pfad mehrfach vorhanden: {path}.")
+        seen.add(path)
+        files.append(path)
+    return files
 
 
 def _list_playbooks() -> int:
@@ -368,6 +396,11 @@ def _finish_child(process: subprocess.Popen[bytes], sig: int, exit_code: int) ->
 def _run_in_venv(arguments: argparse.Namespace) -> int:
     if not _venv_ready():
         return 2
+    try:
+        encryption_files = _load_encryption_file_list()
+    except ValueError as exc:
+        print(f"Fehler in {ENCRYPTION_FILES_PATH}: {exc}", file=sys.stderr)
+        return 2
     if arguments.command == "run":
         ansible_playbook = VENV_PYTHON.parent / "ansible-playbook"
         if not ansible_playbook.is_file() or not os.access(ansible_playbook, os.X_OK):
@@ -380,6 +413,7 @@ def _run_in_venv(arguments: argparse.Namespace) -> int:
             return 2
 
     values = vars(arguments).copy()
+    values["encryption_files"] = encryption_files
     values["project_root"] = str(
         Path(values["project_root"]).expanduser().resolve()
         if values.get("project_root") else REPOSITORY_ROOT

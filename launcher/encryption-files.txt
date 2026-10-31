@@ -1,0 +1,2 @@
+inventory/dev.yml
+vaults/master-password
