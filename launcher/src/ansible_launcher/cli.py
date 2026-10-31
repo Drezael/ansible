@@ -75,6 +75,21 @@ def execute(args: argparse.Namespace) -> int:
         config_file = resolve_config_path(args.config)
         cfg = load_config(config_file)
         project_root = get_project_root(args.project_root, cfg)
+        if args.command == "init-encryption":
+            from .initial_encryption import initialize_encryption
+            if not hasattr(args, "encryption_files"):
+                raise LauncherError("Interne Dateiliste fehlt. Bitte ueber launch.py aufrufen.")
+            encrypted_paths = initialize_encryption(
+                project_root=project_root,
+                config=cfg,
+                file_list=args.encryption_files,
+                public_key_path=Path(args.public_key),
+            )
+            for item in encrypted_paths:
+                print(f"Verschluesselt: {item.relative_to(project_root)}")
+            print(f"Initiale Verschluesselung erfolgreich: {len(encrypted_paths)} Datei(en).")
+            print("Hinweis: Die Klartext-Originaldateien bleiben erhalten.")
+            return 0
         key_path = get_private_key_path(args.key, cfg)
         if args.command == "init-config":
             # Check the path now; an encrypted key will prompt for passphrase.

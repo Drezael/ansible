@@ -69,6 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("menu", parents=[common], help="Interaktive Verwaltung starten")
     commands.add_parser("status", parents=[common], help="Konfiguration und Dateien pruefen")
 
+    initial = commands.add_parser(
+        "init-encryption",
+        parents=[common],
+        help="Alle Dateien aus encryption-files.txt erstmalig mit RSA/AES verschluesseln",
+    )
+    initial.add_argument(
+        "--public-key", required=True,
+        help="Erster RSA-Public-Key (OpenSSH oder PEM)",
+    )
+
     config = commands.add_parser("init-config", parents=[common], help="Home-Konfiguration erstellen")
     config.add_argument("--force", action="store_true", help="Vorhandene Konfiguration ersetzen")
 
@@ -418,7 +428,7 @@ def _run_in_venv(arguments: argparse.Namespace) -> int:
         Path(values["project_root"]).expanduser().resolve()
         if values.get("project_root") else REPOSITORY_ROOT
     )
-    for option in ("key", "config", "temp_dir"):
+    for option in ("key", "config", "temp_dir", "public_key"):
         if values.get(option):
             values[option] = str(Path(values[option]).expanduser().resolve())
 

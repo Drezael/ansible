@@ -64,3 +64,27 @@ def load_rsa_private_key(path: Path, *, prompt: bool = True) -> rsa.RSAPrivateKe
     if key.key_size < MIN_RSA_BITS:
         raise LauncherError(f"RSA-Key zu kurz: {key.key_size} Bit. Mindestens {MIN_RSA_BITS} Bit erforderlich.")
     return key
+
+
+def load_rsa_public_key(path: Path) -> rsa.RSAPublicKey:
+    """Read a public RSA key in OpenSSH (.pub) or PEM format."""
+    try:
+        if not path.is_file():
+            raise LauncherError(f"RSA-Public-Key ist keine Datei: {path}")
+        if path.stat().st_size > 32 * 1024:
+            raise LauncherError("RSA-Public-Key-Datei ist zu gross.")
+        data = path.read_bytes().strip()
+    except OSError as exc:
+        raise LauncherError(f"RSA-Public-Key kann nicht gelesen werden: {path}: {exc}") from exc
+    try:
+        if data.startswith(b"ssh-"):
+            key = serialization.load_ssh_public_key(data)
+        else:
+            key = serialization.load_pem_public_key(data)
+    except (ValueError, UnsupportedAlgorithm) as exc:
+        raise LauncherError("RSA-Public-Key ist ungueltig (OpenSSH/PEM erwartet).") from exc
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise LauncherError("Es werden ausschliesslich RSA-Public-Keys unterstuetzt.")
+    if key.key_size < MIN_RSA_BITS:
+        raise LauncherError(f"RSA-Key zu kurz: {key.key_size} Bit. Mindestens {MIN_RSA_BITS} Bit erforderlich.")
+    return key

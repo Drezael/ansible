@@ -20,7 +20,7 @@ from .errors import LauncherError
 MAX_ARGUMENT_BYTES = 16 * 1024 * 1024
 SUPPORTED_COMMANDS = {
     "run", "init-config", "encrypt-inventory", "encrypt-master",
-    "decrypt-inventory", "menu", "status",
+    "decrypt-inventory", "menu", "status", "init-encryption",
 }
 
 
