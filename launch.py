@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Central Ansible launcher: parse arguments with the standard library.
 
@@ -111,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", parents=[common], help="Playbook ausfuehren")
     run.add_argument("playbook", help="Playbookname ohne Dateiendung, z. B. server.prepare")
-    run.add_argument("--inventory", required=True, help="Verschluesseltes Inventory, z. B. dev")
+    run.add_argument("--inventory", "--i", "-i", dest="inventory", required=True, help="Verschluesseltes Inventory, z. B. dev")
     run.add_argument("--hostname", help="Zielhost fuer -e hostname=...")
     run.add_argument("-e", "--extra-var", action="append", default=[], help="Weitere Ansible-Variable (mehrfach moeglich)")
     run.add_argument("--limit", help="Ansible --limit")
