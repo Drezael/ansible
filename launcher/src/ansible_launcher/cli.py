@@ -75,20 +75,47 @@ def execute(args: argparse.Namespace) -> int:
         config_file = resolve_config_path(args.config)
         cfg = load_config(config_file)
         project_root = get_project_root(args.project_root, cfg)
-        if args.command == "init-encryption":
-            from .initial_encryption import initialize_encryption
+        if args.command in ("keys-init", "keys-add", "keys-list"):
+            from .keyring import init_keys, authorize_key, load_authorized_keys
+            key_path = get_private_key_path(args.key, cfg)
+            if args.command == "keys-list":
+                keys = load_authorized_keys(project_root, load_rsa_private_key(key_path))
+                print(f"Autorisierte RSA-Public-Keys ({len(keys)}):")
+                for number, fp in enumerate(keys, 1):
+                    print(f"  {number}. SHA256:{fp}")
+                return 0
+            if args.command == "keys-init":
+                if not hasattr(args, "encryption_files"):
+                    raise LauncherError("Interne Dateiliste fehlt. Bitte ueber launch.py aufrufen.")
+                fp = init_keys(project_root, Path(args.public_key), key_path,
+                               file_list=args.encryption_files, cfg=cfg)
+                print(f"Erster RSA-Key registriert: SHA256:{fp}")
+                print("Keine Nutzdateien wurden verschluesselt.")
+            else:
+                fp = authorize_key(project_root, Path(args.public_key), key_path)
+                print(f"Weiterer RSA-Key autorisiert: SHA256:{fp}")
+                print("Bestehende verschluesselte Dateien bei Bedarf mit sync-recipients aktualisieren.")
+            return 0
+
+        if args.command in ("encrypt-files", "decrypt-files", "sync-recipients"):
+            from .file_operations import encrypt_list, decrypt_list, sync_recipients
             if not hasattr(args, "encryption_files"):
                 raise LauncherError("Interne Dateiliste fehlt. Bitte ueber launch.py aufrufen.")
-            encrypted_paths = initialize_encryption(
-                project_root=project_root,
-                config=cfg,
-                file_list=args.encryption_files,
-                public_key_path=Path(args.public_key),
-            )
-            for item in encrypted_paths:
-                print(f"Verschluesselt: {item.relative_to(project_root)}")
-            print(f"Initiale Verschluesselung erfolgreich: {len(encrypted_paths)} Datei(en).")
-            print("Hinweis: Die Klartext-Originaldateien bleiben erhalten.")
+            common = {
+                "project_root": project_root, "cfg": cfg,
+                "file_list": args.encryption_files,
+                "private_key_path": get_private_key_path(args.key, cfg),
+                "selected": args.file,
+            }
+            if args.command == "encrypt-files":
+                paths = encrypt_list(**common, force=args.force, delete_source=args.delete_source)
+            elif args.command == "decrypt-files":
+                paths = decrypt_list(**common, force=args.force)
+            else:
+                paths = sync_recipients(**common)
+            for path in paths:
+                print(f"Verarbeitet: {path.relative_to(project_root)}")
+            print(f"Erfolgreich: {len(paths)} Datei(en).")
             return 0
         key_path = get_private_key_path(args.key, cfg)
         if args.command == "init-config":
@@ -99,6 +126,11 @@ def execute(args: argparse.Namespace) -> int:
             return 0
 
         key = load_rsa_private_key(key_path)
+        from .keyring import registry_exists
+        active_registry = registry_exists(project_root)
+        if args.command in ("encrypt-inventory", "encrypt-master", "decrypt-inventory") and active_registry:
+            raise LauncherError("Bei aktiver Schluesselregistrierung bitte die listenbasierten "
+                                "Befehle encrypt-files und decrypt-files verwenden.")
         if args.command == "encrypt-inventory":
             source = _path(args.source, project_root)
             output = _path(args.output, project_root) if args.output else Path(str(source) + ".enc")
@@ -124,6 +156,21 @@ def execute(args: argparse.Namespace) -> int:
             print(f"Klartext-Inventory exportiert (bitte anschließend sicher entfernen): {output}")
             return 0
         if args.command == "run":
+            if active_registry:
+                from .keyring import load_authorized_keys
+                from .crypto import recipient_fingerprints
+                from .files import read_regular
+                import re
+                registered = load_authorized_keys(project_root, key)
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", args.inventory):
+                    raise LauncherError("Ungueltiger Inventoryname.")
+                for encrypted_path, purpose in (
+                    (cfg.inventory_path(args.inventory, project_root), "inventory"),
+                    (cfg.master_path(project_root), "vault-password"),
+                ):
+                    recipients = recipient_fingerprints(read_regular(encrypted_path), purpose)
+                    if recipients is not None and not recipients.issubset(set(registered)):
+                        raise LauncherError(f"Nicht autorisierter Empfaenger in: {encrypted_path}")
             return run_playbook(
                 project_root=project_root, cfg=cfg, private_key=key,
                 playbook_name=args.playbook, inventory_name=args.inventory,

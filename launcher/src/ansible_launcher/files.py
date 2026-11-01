@@ -11,7 +11,7 @@ from .crypto import MAX_FILE_BYTES, decrypt_bytes, encrypt_bytes
 from .errors import DecryptionError, LauncherError
 
 
-def read_regular(path: Path, *, max_bytes: int = MAX_FILE_BYTES + 8192) -> bytes:
+def read_regular(path: Path, *, max_bytes: int = MAX_FILE_BYTES + 192 * 1024) -> bytes:
     try:
         if not stat.S_ISREG(path.stat().st_mode):
             raise LauncherError(f"Keine reguläre Datei: {path}")

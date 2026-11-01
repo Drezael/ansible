@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .errors import DecryptionError, LauncherError
 
 MAGIC = b"ANSIBLE-LAUNCHER-ENC\x00\x01"
-PURPOSE = {"inventory": 1, "vault-password": 2, "file": 3}
+PURPOSE = {"inventory": 1, "vault-password": 2, "file": 3, "keyring": 4}
 MAGIC_V2 = b"ANSIBLE-LAUNCHER-ENC\x00\x02"
 ENCRYPTED_PREFIX = b"ANSIBLE-LAUNCHER-ENC\x00"
 NONCE_BYTES = 12
@@ -161,3 +161,96 @@ def decrypt_bytes(blob: bytes, private_key: rsa.RSAPrivateKey, purpose: str) -> 
         return plaintext
     except (ValueError, InvalidTag) as exc:
         raise DecryptionError("Entschlüsselung fehlgeschlagen: falscher RSA-Key oder beschädigte Datei.") from exc
+
+
+def _v2_sections(blob: bytes, purpose: str) -> tuple[bytes, bytes, bytes, dict[bytes, bytes]]:
+    """Parse a V2 envelope; return (AAD, nonce, ciphertext, wrapped keys)."""
+    if purpose not in PURPOSE or not blob.startswith(MAGIC_V2):
+        raise DecryptionError("Ungueltiges V2-Dateiformat.")
+    offset = len(MAGIC_V2)
+    if len(blob) < offset + 1 + NONCE_BYTES + 2 + 16:
+        raise DecryptionError("V2-Datei ist unvollstaendig.")
+    kind = blob[offset]
+    if kind != PURPOSE[purpose]:
+        raise DecryptionError("Dateityp stimmt nicht ueberein.")
+    offset += 1
+    nonce = blob[offset:offset + NONCE_BYTES]
+    offset += NONCE_BYTES
+    aad = blob[:offset]
+    count, = struct.unpack_from(">H", blob, offset)
+    offset += 2
+    if not 1 <= count <= 128:
+        raise DecryptionError("Ungueltige Empfaengeranzahl.")
+    recipients = {}
+    for _ in range(count):
+        if len(blob) - offset < 34 + 16:
+            raise DecryptionError("Unvollstaendiger Empfaengerheader.")
+        fp = blob[offset:offset + 32]
+        offset += 32
+        size, = struct.unpack_from(">H", blob, offset)
+        offset += 2
+        if fp in recipients or not 256 <= size <= 1024 or len(blob) - offset < size + 16:
+            raise DecryptionError("Ungueltiger Empfaengerheader.")
+        recipients[fp] = blob[offset:offset + size]
+        offset += size
+    return aad, nonce, blob[offset:], recipients
+
+
+def recipient_fingerprints(blob: bytes, purpose: str) -> set[str] | None:
+    """For V2 return recipient fingerprints; V1 cannot identify its recipient."""
+    if blob.startswith(MAGIC_V2):
+        return {item.hex() for item in _v2_sections(blob, purpose)[3]}
+    if blob.startswith(MAGIC):
+        return None
+    raise DecryptionError("Nicht unterstuetztes verschluesseltes Dateiformat.")
+
+
+def _wrap_for_keys(aes_key: bytes, keys: list[rsa.RSAPublicKey]) -> bytes:
+    if not 1 <= len(keys) <= 128:
+        raise LauncherError("Es muessen 1 bis 128 autorisierte RSA-Empfaenger vorliegen.")
+    recipients = []
+    seen = set()
+    for key in sorted(keys, key=_fingerprint):
+        fp = _fingerprint(key)
+        if fp in seen:
+            raise LauncherError("RSA-Empfaenger doppelt vorhanden.")
+        seen.add(fp)
+        wrapped = key.encrypt(aes_key, _oaep())
+        recipients.append(fp + struct.pack(">H", len(wrapped)) + wrapped)
+    return struct.pack(">H", len(recipients)) + b"".join(recipients)
+
+
+def encrypt_bytes_v2_many(plaintext: bytes, keys: list[rsa.RSAPublicKey], purpose: str) -> bytes:
+    """Encrypt once for every public key from the verified key registry."""
+    if purpose not in PURPOSE or len(plaintext) > MAX_FILE_BYTES:
+        raise LauncherError("Ungueltiger Dateityp oder Datei zu gross.")
+    aes_key, nonce = os.urandom(AES_KEY_BYTES), os.urandom(NONCE_BYTES)
+    aad = MAGIC_V2 + bytes((PURPOSE[purpose],)) + nonce
+    return aad + _wrap_for_keys(aes_key, keys) + AESGCM(aes_key).encrypt(nonce, plaintext, aad)
+
+
+def rewrap_v2_recipients(
+    blob: bytes, private_key: rsa.RSAPrivateKey,
+    keys: list[rsa.RSAPublicKey], purpose: str,
+) -> bytes:
+    """Replace wrapped AES keys without re-encrypting V2 AES ciphertext.
+
+    V1 is converted by decrypting and encrypting once, because V1 uses a
+    different authenticated envelope that cannot be rewrapped directly.
+    """
+    if blob.startswith(MAGIC) and not blob.startswith(MAGIC_V2):
+        plaintext = decrypt_bytes(blob, private_key, purpose)
+        return encrypt_bytes_v2_many(plaintext, keys, purpose)
+    aad, nonce, ciphertext, recipients = _v2_sections(blob, purpose)
+    fp = _fingerprint(private_key.public_key())
+    wrapped = recipients.get(fp)
+    if wrapped is None:
+        raise DecryptionError("Dieser RSA-Key ist kein Empfaenger dieser Datei.")
+    try:
+        aes_key = private_key.decrypt(wrapped, _oaep())
+        if len(aes_key) != AES_KEY_BYTES:
+            raise DecryptionError("Ungueltiger AES-Dateischluessel.")
+        AESGCM(aes_key).decrypt(nonce, ciphertext, aad)
+    except (ValueError, InvalidTag) as exc:
+        raise DecryptionError("Datei ist beschaedigt oder falscher RSA-Key.") from exc
+    return aad + _wrap_for_keys(aes_key, keys) + ciphertext

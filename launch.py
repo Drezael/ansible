@@ -69,15 +69,25 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("menu", parents=[common], help="Interaktive Verwaltung starten")
     commands.add_parser("status", parents=[common], help="Konfiguration und Dateien pruefen")
 
-    initial = commands.add_parser(
-        "init-encryption",
-        parents=[common],
-        help="Alle Dateien aus encryption-files.txt erstmalig mit RSA/AES verschluesseln",
-    )
-    initial.add_argument(
-        "--public-key", required=True,
-        help="Erster RSA-Public-Key (OpenSSH oder PEM)",
-    )
+    keys_init = commands.add_parser("keys-init", parents=[common], help="Ersten RSA-Key registrieren (keine Verschluesselung)")
+    keys_init.add_argument("--public-key", required=True, help="Public Key des ersten Benutzers")
+
+    keys_add = commands.add_parser("keys-add", parents=[common], help="RSA-Public-Key mit einem autorisierten Private Key freigeben")
+    keys_add.add_argument("--public-key", required=True, help="Neu zu autorisierender Public Key")
+
+    commands.add_parser("keys-list", parents=[common], help="Signierte RSA-Schluesselliste pruefen und anzeigen")
+
+    for name, label in (
+        ("encrypt-files", "Aufgelistete Klartextdateien fuer alle registrierten RSA-Keys verschluesseln"),
+        ("decrypt-files", "Aufgelistete Dateien mit autorisiertem RSA-Key entschluesseln"),
+        ("sync-recipients", "Empfaenger bereits verschluesselter Dateien aktualisieren"),
+    ):
+        command = commands.add_parser(name, parents=[common], help=label)
+        command.add_argument("--file", help="Optional nur einen Dateipfad aus encryption-files.txt bearbeiten")
+        if name != "sync-recipients":
+            command.add_argument("--force", action="store_true", help="Vorhandenes Ziel explizit ersetzen")
+        if name == "encrypt-files":
+            command.add_argument("--delete-source", action="store_true", help="Klartextdateien erst nach Entschluesselungspruefung entfernen")
 
     config = commands.add_parser("init-config", parents=[common], help="Home-Konfiguration erstellen")
     config.add_argument("--force", action="store_true", help="Vorhandene Konfiguration ersetzen")

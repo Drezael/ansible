@@ -1,232 +1,197 @@
-# Ansible Launcher (Version 0.1.0)
+# Ansible Launcher: verschluesselte und signierte RSA-Schluesselregistrierung
 
-Python-CLI zum Starten von `ansible-playbook` mit RSA/AES-verschlüsselten
-Inventories und einem RSA/AES-verschlüsselten Master-Vault-Passwort.
-Die vorhandenen Ansible-Vault-Dateien (`vaults/master.vault` usw.) und die
-Playbooks bleiben unverändert.
+Diese Version baut auf dem GitHub-Stand vom 31.10.2026 auf. Die bisherige
+`init-encryption`-Funktion wird durch eine getrennte Schluesselregistrierung und
+explizite Dateioperationen ersetzt. Die Playbooks werden weiterhin lokal mit
+Ansible ausgefuehrt; es gibt keine Playbook-/Host-ACL und keinen Master-Key.
 
-## Voraussetzungen
+## Dateien im Repository
 
-- Linux mit Python 3.12+ und `ansible-playbook` im `PATH`
-- Python-Pakete `cryptography` und `bcrypt` (über `pip install -e .`)
-- Privater RSA-Schlüssel im OpenSSH- oder PEM-Format, **mindestens 3072 Bit**,
-  empfohlen 4096 Bit; Dateirechte `0600`/`0400`.
-- Für die standardmäßig verpflichtende RAM-Zwischenablage ein beschreibbares
-  tmpfs (üblicherweise `/dev/shm`).
+```text
+public_keys/
+  user1.pub                       # Eingabe fuer keys-init
+  user2.pub                       # Eingabe fuer keys-add
+launcher/
+  encryption-files.txt            # Ein Quellpfad je Zeile
+  authorized-keys.enc             # Bei keys-init erzeugt, AES-256-GCM/RSA-OAEP
+  authorized-keys.sig             # Bei keys-init erzeugt, RSA-PSS-Signatur
+```
 
-**Wichtig:** Ed25519/ECDSA-Schlüssel können nicht als RSA-Entschlüsselungsschlüssel
-verwendet werden. Ein SSH-Agent stellt die benötigte RSA-OAEP-Entschlüsselung
-normalerweise nicht bereit. Das Tool lädt den privaten RSA-Schlüssel aus der Datei.
+Der gesamte RSA-Public-Key (kanonisch als DER/Base64) wird **innerhalb**
+von `authorized-keys.enc` gespeichert. Der SHA-256-Fingerprint wird daraus
+abgeleitet. Nach der Registrierung werden die `.pub`-Dateien in `public_keys/`
+**nicht mehr** zum Verschluesseln verwendet. Ein spaeterer Austausch einer
+solchen Datei aendert weder Berechtigungen noch Empfaenger.
 
-## Installation
+Die verschluesselte Schluesselliste enthaelt eine Kette signierter
+Registrierungen. Jeder neue Public Key muss von einem bereits autorisierten
+Private Key signiert sein. Zusaetzlich signiert der Autorisierende **die exakten
+verschluesselten Bytes** der aktuellen Liste in `authorized-keys.sig`.
+Ein ungueltiger Hash, eine manipulierte Signatur, fehlende Datei oder ein
+nicht autorisierter Empfaenger fuehrt zum Abbruch.
 
-Archiv entpacken, im entpackten Projekt:
+Jeder autorisierte Key ist gleichberechtigt. Beim Erst-Init signiert der erste
+Key seine eigene Registrierung. Es wird keine neue Admin-Rolle erstellt.
+
+## Einrichtung
+
+Voraussetzungen: Python 3.12+, das bisherige `launcher/.venv`, `cryptography`,
+RSA-Private-Keys mit mindestens 3072 Bit und Dateirechten 0600.
+Private Keys gehoeren **niemals** ins Repository.
+
+**1. Ersten Public Key aufnehmen** (noch keine Nutzdateien verschluesseln):
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-ansible-launcher --help
+python3 launch.py keys-init \
+  --key ~/.ssh/user1 \
+  --public-key public_keys/user1.pub
 ```
 
-Ohne Installation (mit installierter Dependency und `PYTHONPATH=src`):
+Die Dateien `launcher/authorized-keys.enc` und
+`launcher/authorized-keys.sig` werden neu erstellt. Bestehende verschluesselte
+Dateien aus dem frueheren `init-encryption`-Ablauf werden vorab auf
+Entschluesselbarkeit mit Key 1 geprueft, aber nicht veraendert.
+
+**2. Weitere Public Keys aufnehmen** (keine Nutzdateien veraendern):
 
 ```bash
-PYTHONPATH=src python -m ansible_launcher --help
+python3 launch.py keys-add \
+  --key ~/.ssh/user1 \
+  --public-key public_keys/user2.pub
 ```
 
-## Einrichten
+Vor `keys-add` den Fingerprint der neuen `.pub`-Datei ueber eine
+vertrauenswuerdige Quelle vergleichen: Wird die `.pub`-Datei **vor der
+Aufnahme** ausgetauscht, wuerde der bisher autorisierte Benutzer sonst den
+falschen Key unterschreiben. **Nach** der Aufnahme ist die externe `.pub`-Datei
+nicht mehr massgeblich.
 
-Der vorhandene SSH-RSA-Private-Key kann verwendet werden, wenn er den
-Voraussetzungen entspricht. Bei einem passphrasegeschützten Key wird die
-Passphrase interaktiv (ohne Echo) abgefragt.
-
-Beispiel-Konfiguration erstellen:
+Nach der Aufnahme kann auch Key 2 die Schluesselliste entschluesseln und
+weitere Schluessel autorisieren. Zum Pruefen:
 
 ```bash
-ansible-launcher init-config \
-  --project-root /home/USER/ansible \
-  --key /home/USER/.ssh/id_rsa
+python3 launch.py keys-list --key ~/.ssh/user2
 ```
 
-Dies erzeugt `~/.config/ansible-launcher/config.toml` (0600) mit folgenden Feldern:
+`keys-list` benoetigt einen autorisierten Private Key, weil die Liste
+verschluesselt ist.
 
-```toml
-[launcher]
-project_root = "/home/USER/ansible"
-key_file = "/home/USER/.ssh/id_rsa"
-inventory_dir = "inventory"
-master_password_file = "vaults/master-password.enc"
-```
-
-**Niemals Passwörter oder private Schlüssel in die TOML-Konfiguration schreiben.**
-Alle Befehle akzeptieren außerdem `--key PFAD`, `--project-root PFAD` und
-`--config PFAD`; CLI-Angaben überschreiben die Konfiguration.
-
-## Bestehende Inventories verschlüsseln
-
-Beispiel (aus beliebigem Arbeitsverzeichnis, wenn config.toml existiert):
+**3. Aufgelistete Nutzdateien fuer ALLE autorisierten Keys verschluesseln:**
 
 ```bash
-ansible-launcher encrypt-inventory --source inventory/dev.yml
+python3 launch.py encrypt-files --key ~/.ssh/user1
 ```
 
-Erzeugt `inventory/dev.yml.enc`. Die Quelldatei bleibt zunächst unverändert.
-Nach einer erfolgreichen Prüfung kann man die Klartextquelle beim erneuten
-Verschlüsseln explizit entfernen:
+Nur die Dateien aus `launcher/encryption-files.txt` werden verarbeitet.
+Die Quellen bleiben standardmaessig erhalten. Sie koennen nach erfolgreicher
+Entschluesselungspruefung entfernt werden:
 
 ```bash
-ansible-launcher encrypt-inventory --source inventory/dev.yml --force --delete-source
+python3 launch.py encrypt-files --key ~/.ssh/user1 --force --delete-source
 ```
 
-`--delete-source` prüft das gespeicherte Chiffrat durch vollständige
-Entschlüsselung, bevor die Quelle entfernt wird. **Löschen ist keine sichere
-Datenträgerbereinigung.** Zuvor veröffentlichte Git-Commits bleiben erhalten.
-Keinesfalls die unverschlüsselte Datei weiter in Git versionieren.
+`--force` erlaubt das absichtliche Ersetzen bereits vorhandener `.enc`-Dateien.
+Ohne `--force` wird bei vorhandenen Zieldateien vor der Verarbeitung abgebrochen.
 
-## Master-Vault-Passwort verschlüsseln
-
-Die bestehende Master-Vault-Passwortdatei bleibt zunächst Quelle für die Migration.
-Sie wird **nicht** in ein Ansible-Vault-Format umgewandelt, sondern unter RSA/AES
-als `vaults/master-password.enc` gespeichert:
+**4. Dateien zur Bearbeitung explizit entschluesseln:**
 
 ```bash
-ansible-launcher encrypt-master --source ~/vault.pass
+python3 launch.py decrypt-files --key ~/.ssh/user2
 ```
 
-Passe den Quellpfad an die bisher verwendete Datei an. Die vorhandene
-`vaults/master.vault` wird nicht verändert. Bei bereits vorhandenem Chiffrat:
-`--force`. Nur nach Überprüfung: optional `--delete-source`.
-
-Hinweis: In der vorhandenen `ansible.cfg` zeigt `vault_identity_list`
-auf `~/vault.pass`. Bei Launcher-Ausführung wird diese Einstellung über
-`ANSIBLE_VAULT_IDENTITY_LIST` mit dem temporären Dateipfad überschrieben.
-Außerhalb des Launchers benötigen bisherige manuelle Ansible-Aufrufe weiterhin
-eine geeignete Vault-Identität.
-
-## Playbook ausführen
+Optional ist eine einzelne Datei mit `--file inventory/dev.yml` waehlbar.
+Bereits vorhandene Klartextdateien werden ohne `--force` niemals ersetzt.
+Bearbeitete Dateien wieder fuer alle autorisierten Keys verschluesseln:
 
 ```bash
-ansible-launcher run prepare_server --inventory dev --hostname test-host
-ansible-launcher run bootstrap_server --inventory dev --hostname test-host
-ansible-launcher run prepare_server --inventory dev --hostname test-host --check --diff
-ansible-launcher run prepare_server --inventory dev --hostname test-host -vv --tags install
-ansible-launcher run prepare_server --inventory dev --hostname test-host -e debug=true --limit test-host
+python3 launch.py encrypt-files --key ~/.ssh/user2 --force --delete-source
 ```
 
-Mit anderem RSA-Key:
+**5. Nach Aufnahme weiterer Keys bereits verschluesselte Daten aktualisieren:**
 
 ```bash
-ansible-launcher run prepare_server --inventory dev --hostname test-host \
-  --key ~/.ssh/id_rsa
+python3 launch.py sync-recipients --key ~/.ssh/user1
 ```
 
-Für beliebige Playbooks werden zusätzliche Variablen via `-e`/`--extra-var`
-weitergegeben; `--hostname` erzeugt `-e hostname=...`. Die CLI unterstützt
-`--limit`, `--tags`, `--skip-tags`, `--forks`, `--check`, `--diff`, `-v` bis `-vvvv`.
-Playbooks werden ausschließlich aus `playbooks/<name>.yml` geladen.
+Bei V2-Dateien bleibt das AES-Chiffrat unveraendert; nur die RSA-verpackten
+AES-Dateischluessel werden fuer alle aktuell autorisierten Public Keys
+neu erstellt. Alte V1-Dateien werden dabei einmalig zu V2 migriert.
 
-### Ablauf
-
-1. RSA-Private-Key öffnen (ggf. Passphrase abfragen)
-2. `inventory/dev.yml.enc` und `vaults/master-password.enc` entschlüsseln
-3. Beide Dateien mit `0600` in einem `0700`-Verzeichnis auf einem tmpfs schreiben
-4. `ansible-playbook -i <temporäres Inventory> ...` ohne `shell=True` starten
-5. `ANSIBLE_INVENTORY`, `ANSIBLE_VAULT_IDENTITY_LIST`, `ANSIBLE_CONFIG` und
-   `ANSIBLE_VAULT_ID_MATCH` an den Prozess vererben, auch für untergeordnete
-   `ansible-playbook`-Aufrufe aus `bootstrap_server.yml`
-6. Live-Ausgabe und den Exit-Code des Playbooks übernehmen
-7. Prozessgruppe vollständig beenden und temporäre Dateien entfernen
-
-Die Klartextdateien werden standardmäßig **nicht** auf einem regulären
-Datenträger angelegt. Nur in ausdrücklich akzeptierten Ausnahmefällen kann
-`--allow-disk-temp` zusammen mit `--temp-dir PFAD` verwendet werden.
-
-## Ver- und Entschlüsselung
-
-- Daten: AES-256-GCM mit frischem 32-Byte-Schlüssel und 96-Bit-Nonce pro Datei
-- AES-Schlüssel: RSA-OAEP mit SHA-256 und MGF1-SHA-256
-- Dateiformat: `ANSIBLE-LAUNCHER-ENC`, Version 1, Zweckkennung (Inventory/Vault),
-  RSA-Schlüssellänge, Nonce, verschlüsselter AES-Schlüssel, Chiffrat und GCM-Tag
-- Der Datei-Header ist als GCM-AAD gegen Manipulation geschützt.
-- Integrität wird beim Entschlüsseln geprüft; falsche Keys und veränderte
-  Chiffrate werden abgewiesen.
-- Maximum der Klartextdateigröße: 64 MiB.
-
-Das Format ist eigens für dieses Tool definiert und nicht mit Ansible Vault,
-OpenSSL `enc` oder anderen Dateiformaten kompatibel. Die unveränderten
-`*.vault`-Dateien entschlüsselt weiterhin Ansible mit dem temporären Master-
-Vault-Passwort.
-
-## Inventories bearbeiten
-
-Ein Inventory lässt sich explizit entschlüsseln:
+**6. Playbooks wie zuvor starten:**
 
 ```bash
-ansible-launcher decrypt-inventory \
-  --source inventory/dev.yml.enc \
-  --output inventory/dev.yml
+python3 launch.py run server.prepare --inventory dev \
+  --hostname test-host --key ~/.ssh/user2
 ```
 
-**Achtung:** Das schreibt absichtlich einen persistenten Klartext. Bearbeiten,
-`encrypt-inventory --force` aufrufen und das Klartextoriginal entfernen.
-Eine verschlüsselte In-place-Editierfunktion ohne persistente Klartextdatei
-ist für eine spätere Version vorgesehen. Editor-Swapfiles und temporäre
-Backups können Klartext auf reguläre Datenträger schreiben.
+Bei vorhandener Registrierung muss der Private Key die signierte Schluesselliste
+oeffnen koennen und darin autorisiert sein. Unautorisierte RSA-Empfaenger in
+den verschluesselten Inventory-/Vault-Passwortdateien werden abgewiesen.
+Die bisherigen Einzeldateibefehle `encrypt-inventory`, `encrypt-master` und
+`decrypt-inventory` sind dann gesperrt, da sie nicht alle Empfaenger verarbeiten.
 
-## Sicherheit und Einschränkungen
+## Dateiliste
 
-- RAM-Zwischenspeicher und Dateirechte reduzieren das Risiko, garantieren aber
-  keine vollständige Vertraulichkeit gegen Root, Speicherabbilder, Swap oder
-  kompromittierte Prozesse.
-- Bei regulärem Ende, Fehler, `Ctrl+C` und `SIGTERM` wird bereinigt.
-  Nach `SIGKILL`, Absturz oder Stromausfall ist Cleanup nicht garantiert,
-  wobei tmpfs beim Neustart geleert wird.
-- Zusätzliche `-e`-Variablen werden als normale Prozessargumente übertragen.
-  **Keine geheimen Passwörter als Klartext in `-e` verwenden** (Prozessliste/Logs).
-- Die externe Ansible-Ausführung benötigt ihr installiertes `ansible-core`,
-  eine funktionierende SSH-Verbindung und die bekannten Vault-Geheimnisse.
-- Die bestehenden Playbooks behalten ihre Funktion; der Launcher ersetzt
-  **nicht** die Ansible-Vault-Encryption deiner weiteren Secret-Dateien.
-- Vor Umstellung aller Aufrufe sicherstellen, dass auch eigenständige Aufrufe
-  der Playbooks (außerhalb des Launchers) berücksichtigt sind.
+`launcher/encryption-files.txt` enthaelt jeweils **einen repo-relativen
+Quellpfad pro Zeile**, ohne `.enc`. Beispiel:
+
+```text
+inventory/dev.yml
+vaults/master-password
+```
+
+Die Zieldatei ist jeweils der Quellpfad mit `.enc` am Ende. Leere Zeilen und
+Kommentarzeilen (`#`) werden ignoriert. Aufgelistete geschuetzte
+Registrierungsdateien oder symbolische Links sind nicht erlaubt.
+
+## Kryptografie und Vertrauensmodell
+
+- AES-256-GCM verschluesselt jede Nutzdatei genau einmal.
+- RSA-OAEP/SHA-256 verpackt den AES-Dateischluessel fuer jeden autorisierten
+  Public Key der geprueften Schluesselliste.
+- RSA-PSS/SHA-256 signiert die Erstregistrierung, jede weitere Key-Aufnahme
+  und den exakten verschluesselten aktuellen Registrierungsstand.
+- Signierte Autorisierungen verweisen auf den vorherigen signierten Eintrag.
+- Der SHA-256-Fingerprint basiert auf dem DER-kodierten RSA-Public-Key.
+- Vollstaendige Public Keys werden aus der verifizierten, **verschluesselten**
+  Liste geladen, nicht aus beliebigen `.pub`-Dateien.
+
+**Vertrauensgrenze:** Der erste Key signiert sich selbst. Seine Erstregistrierung
+ist nur so vertrauenswuerdig wie der urspruenglich kontrollierte Git-Stand.
+Wer das gesamte Repository einschliesslich der Anfangshistorie austauschen
+kann, kann auch eine neue selbstsignierte Kette herstellen. Ein solcher
+kompletter Austausch oder ein Rollback zu einer aelteren gueltig signierten
+Version ist **ohne unabhaengigen Vertrauensanker nicht kryptografisch
+nachweisbar**. Der Repository-Zugriff und die Git-Historie muessen deshalb
+geschuetzt werden. Fuer die beschriebenen Ablaufe ist kein lokaler Trust-Pin
+und keine weitere Datei ausserhalb des Repositories erforderlich.
+
+Auch kann ein bereits autorisierter Benutzer die von ihm entschluesselten
+Geheimnisse weitergeben. Eine lokale Python-Anwendung ist keine gegen
+berechtigte lokale Benutzer unueberwindbare Zugriffssperre.
+
+## Migration und Sicherheitshinweise
+
+- `init-encryption` und das alte Modul `initial_encryption.py` werden entfernt.
+  Ein erster Key wird nun mit `keys-init` registriert, ohne Nutzdaten zu
+  verschluesseln. Erst danach `encrypt-files` oder `sync-recipients` ausfuehren.
+- `authorized-keys.enc` und `.sig` muessen **zusammen** versioniert und
+  unveraendert gehalten werden. Bei fehlender oder ungueltiger Signatur
+  bricht der Launcher ab.
+- Klartextdateien und Private Keys nicht nach Git committen. Der lokale
+  Loeschvorgang entfernt keine Daten aus bereits veroeffentlichten Git-Commits.
+- `decrypt-files` schreibt bewusste Klartextdateien auf den Datentraeger.
+  Bei Dateiausgabe erfolgt eine Vorpruefung und bestmoeglicher Rollback;
+  ein Stromausfall waehrend mehrerer Dateiersetzungen ist keine transaktionale
+  Operation.
+- Entfernen eines registrierten Schluessels und sicherer Widerruf sind in
+  dieser Version **noch nicht** implementiert.
 
 ## Tests
 
 ```bash
-python -m pip install -e '.[test]'
-pytest -q
+PYTHONPATH=launcher/src python3 -m pytest -q launcher/tests
 ```
 
-Die Tests prüfen Kryptografie, Dateiformat, RSA-Passphrase und Dateirechte,
-Konfiguration, Dateischutz, Runner-Parameter, Prozessumgebung, Exit-Codes
-und Cleanup mit einem lokalen Ansible-Test-Dummy. Auf realen Ansible-Zielhosts
-wird nichts geändert.
-
-## Übernahme in das bestehende GitHub-Repository
-
-Der ZIP-Ordner `ansible_launcher_v1` kann als Unterverzeichnis des bestehenden
-Repositories `ansible/` abgelegt werden. Dann einmalig installieren:
-
-```bash
-cd /pfad/zu/ansible/ansible_launcher_v1
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-```
-
-`project_root` in der Home-Konfiguration zeigt weiterhin auf das **äußere**
-Ansible-Repository, nicht auf `ansible_launcher_v1`.
-
-Die `.gitignore` im Launcher-Unterordner schützt nur diesen Unterordner.
-Zusätzlich im `.gitignore` des **äußeren** Ansible-Repositories die untenstehenden
-Zeilen ergänzen, sobald die Inventories migriert werden:
-
-```gitignore
-/inventory/*.yml
-/inventory/*.yaml
-/vault.pass
-```
-
-Das Entfernen bereits versionierter Dateien aus der Git-Historie muss gesondert
-geplant werden; `.gitignore` allein löscht keine bisherigen Git-Commits.
+Alle Integrationstests verwenden lokale Beispieldateien und simulieren
+Ansible-Aufrufe. Es werden keine Zielserver veraendert.
