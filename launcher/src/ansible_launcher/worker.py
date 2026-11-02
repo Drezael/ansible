@@ -71,6 +71,23 @@ class _Termination(Exception):
     """SIGTERM caught outside the Ansible executor's own signal handler."""
 
 
+def _report_configuration(args: argparse.Namespace) -> None:
+    """Report the configuration actually parsed; never print secret values."""
+    from .config import load_config, resolve_config_path
+
+    selected = resolve_config_path(args.config)
+    if not selected.is_file():
+        if args.config:
+            raise LauncherError(f"Explizite Konfigurationsdatei nicht gefunden: {selected}")
+        print("Launcher-Konfiguration: Keine Home-Konfigurationsdatei gefunden (Standardwerte).", flush=True)
+        return
+
+    # Validate before claiming that the file was loaded successfully.
+    load_config(selected)
+    location = "Home-Konfiguration" if selected.is_relative_to(Path.home().resolve()) else "Konfiguration"
+    print(f"Launcher-Konfiguration: {location} geladen: {selected}", flush=True)
+
+
 def main() -> int:
     previous_term = signal.getsignal(signal.SIGTERM)
 
@@ -80,6 +97,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, terminate)
     try:
         args = _load_args()
+        _report_configuration(args)
         if args.command == "status":
             from .menu import show_status
             return show_status(Path(args.project_root).expanduser().resolve(), config_path=args.config)
