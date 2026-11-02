@@ -1,11 +1,17 @@
-"""YAML configuration for Ansible launcher; all relative paths use repository root."""
+"""Personal launcher configuration: only key and inventory/master paths.
+
+Project internals, signed key registry and file selection are not user settings.
+Project-relative paths are resolved from the checked-out repository root.
+"""
 from __future__ import annotations
+
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import stat
 import tomllib
+
 from .errors import LauncherError
 
 HOME_YAML = Path('~/.ansible-launcher.yml')
@@ -13,25 +19,14 @@ HOME_YAML_ALT = Path('~/.ansible-launcher.yaml')
 LEGACY_TOML = Path('~/.config/ansible-launcher/config.toml')
 DEFAULT_CONFIG = HOME_YAML
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+ALLOWED_FIELDS = frozenset({'key_file', 'inventory_dir', 'master_password_file'})
 
-@dataclass(frozen=True)
-class FileSpec:
-    source: str
-    target: str
-    purpose: str
 
 @dataclass(frozen=True)
 class LauncherConfig:
-    project_root: Path | None = None
     key_file: Path | None = None
     inventory_dir: str = 'inventory'
     master_password_file: str = 'vault-master.pass'
-    files: tuple[FileSpec, ...] = ()
-    keyring_file: str = 'launcher/authorized-keys.enc'
-    keyring_signature_file: str = 'launcher/authorized-keys.sig'
-    playbooks_dir: str = 'playbooks'
-    ansible_config_file: str = 'ansible.cfg'
-    encryption_files_list: str | None = None
 
     def inventory_path(self, name: str, project_root: Path) -> Path:
         return resolve_project_relative(project_root, self.inventory_dir) / f'{name}.yml.enc'
@@ -70,39 +65,6 @@ def _relative(value: str, field: str) -> str:
     return value
 
 
-def _parse_files(tbl: dict, inventory_dir: str, master: str) -> tuple[FileSpec, ...]:
-    raw = tbl.get('files', [])
-    if not isinstance(raw, list):
-        raise LauncherError('files muss eine YAML-Liste sein.')
-    parsed = []
-    sources, targets = set(), set()
-    master_targets = 0
-    for i, item in enumerate(raw, 1):
-        if not isinstance(item, dict) or set(item) != {'source', 'target', 'purpose'}:
-            raise LauncherError(f'files[{i}] benoetigt source, target und purpose.')
-        source = _relative(item['source'], f'files[{i}].source')
-        target = _relative(item['target'], f'files[{i}].target')
-        purpose = item['purpose']
-        if not isinstance(purpose, str) or purpose not in ('inventory', 'vault-password', 'file'):
-            raise LauncherError(f'files[{i}].purpose muss inventory, vault-password oder file sein.')
-        if source == target or source in sources or target in targets:
-            raise LauncherError('Doppelte Quelldatei/Zieldatei oder Quelle gleich Ziel in files.')
-        sources.add(source)
-        targets.add(target)
-        if purpose == 'vault-password':
-            master_targets += 1
-            if resolve_project_relative(REPOSITORY_ROOT, target) != resolve_project_relative(REPOSITORY_ROOT, master):
-                raise LauncherError('Das Ziel mit purpose vault-password muss master_password_file entsprechen.')
-        if purpose == 'inventory' and not target.endswith('.yml.enc'):
-            raise LauncherError('Inventory-Ziele muessen auf .yml.enc enden.')
-        parsed.append(FileSpec(source, target, purpose))
-    if master_targets > 1:
-        raise LauncherError('Nur eine vault-password-Datei ist erlaubt.')
-    if sources & targets:
-        raise LauncherError('Ein Dateipfad darf nicht zugleich Quelle und Ziel sein.')
-    return tuple(parsed)
-
-
 def load_config(path: Path) -> LauncherConfig:
     if not path.exists():
         return LauncherConfig()
@@ -131,21 +93,18 @@ def load_config(path: Path) -> LauncherConfig:
             raise LauncherError('TOML-Konfiguration benoetigt [launcher].')
     else:
         raise LauncherError('Konfiguration muss .yml, .yaml oder .toml sein.')
+    unknown = set(tbl) - ALLOWED_FIELDS
+    if unknown:
+        raise LauncherError(f'Nicht unterstuetzte Benutzerkonfiguration: {", ".join(sorted(map(str, unknown)))}')
     key = _string(tbl, 'key_file')
     inventory = _string(tbl, 'inventory_dir', 'inventory') or 'inventory'
     master = _string(tbl, 'master_password_file', 'vault-master.pass') or 'vault-master.pass'
     _relative(inventory, 'inventory_dir')
     _relative(master, 'master_password_file')
-    for field in ('keyring_file', 'keyring_signature_file', 'playbooks_dir', 'ansible_config_file'):
-        _relative(_string(tbl, field, getattr(LauncherConfig(), field)), field)
     return LauncherConfig(
-        keyring_file=_string(tbl, 'keyring_file', 'launcher/authorized-keys.enc'),
-        keyring_signature_file=_string(tbl, 'keyring_signature_file', 'launcher/authorized-keys.sig'),
-        playbooks_dir=_string(tbl, 'playbooks_dir', 'playbooks'),
-        ansible_config_file=_string(tbl, 'ansible_config_file', 'ansible.cfg'),
         key_file=Path(key).expanduser().resolve() if key else None,
-        inventory_dir=inventory, master_password_file=master,
-        files=_parse_files(tbl, inventory, master),
+        inventory_dir=inventory,
+        master_password_file=master,
     )
 
 
@@ -173,18 +132,14 @@ def get_private_key_path(argument: str | None, cfg: LauncherConfig) -> Path:
 def write_config(path: Path, *, project_root: Path, key_file: Path, overwrite: bool = False) -> None:
     if path.exists() and not overwrite:
         raise LauncherError(f'Konfiguration existiert bereits: {path} (verwende --force).')
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.suffix.lower() not in ('.yaml', '.yml'):
         raise LauncherError('Neue Konfigurationen werden ausschliesslich als YAML erstellt.')
-    content = ('# Relative Pfade beziehen sich auf das Repository-Root.\n'
-               f'key_file: {json.dumps(str(key_file))}\n'
-               'inventory_dir: inventory\n'
-               'master_password_file: vault-master.pass\n'
-               'keyring_file: launcher/authorized-keys.enc\n'
-               'keyring_signature_file: launcher/authorized-keys.sig\n'
-               'playbooks_dir: playbooks\n'
-               'ansible_config_file: ansible.cfg\n'
-               'files: []\n').encode('utf-8')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    content = (
+        f'key_file: {json.dumps(str(key_file))}\n'
+        'inventory_dir: inventory\n'
+        'master_password_file: vault-master.pass\n'
+    ).encode('utf-8')
     from .files import atomic_write
     atomic_write(path, content, overwrite=overwrite)
     if os.name == 'posix':

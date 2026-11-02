@@ -1,15 +1,74 @@
-"""Configuration-driven encrypted file operations with signed authorized keys."""
+"""Signed-key file operations from a repository-owned file list.
+
+No file mappings are stored in the personal YAML. A line is either a source
+path (default target: source + '.enc') or 'source -> target'. The latter is
+necessary for a custom master-password target such as vault-master.pass.
+"""
 from __future__ import annotations
+
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import stat
 import tempfile
+
 from .config import LauncherConfig, resolve_project_relative
 from .crypto import (ENCRYPTED_PREFIX, MAX_FILE_BYTES, decrypt_bytes,
                      encrypt_bytes_v2_many, recipient_fingerprints, rewrap_v2_recipients)
 from .errors import LauncherError
 from .files import read_regular
 from .keyring import authorized_private_key
+
+
+PROTECTED_PATHS = (
+    'launcher/authorized-keys.enc',
+    'launcher/authorized-keys.sig',
+    'launcher/encryption-files.txt',
+)
+
+
+def _check_relative_path(raw: str) -> PurePosixPath:
+    if (not isinstance(raw, str) or not raw or raw.startswith('/')
+            or '\\' in raw or '\x00' in raw or raw.endswith('.enc')
+            or any(part in ('', '.', '..') for part in raw.split('/'))):
+        raise LauncherError(f'Ungueltiger Quelldateipfad: {raw!r}.')
+    return PurePosixPath(raw)
+
+
+def _check_target(raw: str) -> PurePosixPath:
+    if (not isinstance(raw, str) or not raw or raw.startswith('/')
+            or '\\' in raw or '\x00' in raw
+            or any(part in ('', '.', '..') for part in raw.split('/'))):
+        raise LauncherError(f'Ungueltiger Zieldateipfad: {raw!r}.')
+    return PurePosixPath(raw)
+
+
+def load_file_list(root: Path) -> list[str]:
+    """Read repository-owned mappings without touching any source plaintext."""
+    path = root / 'launcher/encryption-files.txt'
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise LauncherError('Die Verschluesselungsliste ist groesser als 1 MiB.')
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise LauncherError(f'Dateiliste konnte nicht gelesen werden: {path}: {exc}') from exc
+    result: list[str] = []
+    sources: set[str] = set()
+    for lineno, line in enumerate(lines, 1):
+        value = line.strip()
+        if not value or value.startswith('#'):
+            continue
+        parts = value.split('->')
+        if len(parts) not in (1, 2):
+            raise LauncherError(f'Ungueltige Dateizuordnung in Zeile {lineno}.')
+        source = parts[0].strip()
+        _check_relative_path(source)
+        if len(parts) == 2:
+            _check_target(parts[1].strip())
+        if source in sources:
+            raise LauncherError(f'Doppelte Quelle in Zeile {lineno}: {source}')
+        sources.add(source)
+        result.append(value)
+    return result
 
 
 def _check_no_symlinks(path: Path, root: Path) -> None:
@@ -23,35 +82,53 @@ def _check_no_symlinks(path: Path, root: Path) -> None:
 
 
 def _entries(root: Path, cfg: LauncherConfig, names: list[str], selected: str | None):
-    """Use only validated source/target mappings from the home configuration."""
-    if not cfg.files:
-        raise LauncherError('Keine files-Eintraege in der Home-Konfiguration vorhanden.')
-    sources = [entry.source for entry in cfg.files]
-    if selected is not None and selected not in sources:
-        raise LauncherError(f'Datei steht nicht unter files in der Home-Konfiguration: {selected}')
+    """Resolve list entries against repo root, with explicit master target."""
+    if not names:
+        raise LauncherError('Die Verschluesselungsliste ist leer.')
     root = root.resolve()
-    protected = {resolve_project_relative(root, cfg.keyring_file),
-                 resolve_project_relative(root, cfg.keyring_signature_file)}
-    entries = []
     inventory_dir = resolve_project_relative(root, cfg.inventory_dir)
     master_target = cfg.master_path(root)
-    for entry in cfg.files:
-        if selected is not None and entry.source != selected:
-            continue
-        source = resolve_project_relative(root, entry.source)
-        target = resolve_project_relative(root, entry.target)
-        if source == target or source in protected or target in protected:
-            raise LauncherError(f'Ungueltiger oder geschuetzter Pfad: {entry.source} -> {entry.target}')
+    protected = {root / name for name in PROTECTED_PATHS}
+    mappings = []
+    all_sources: set[str] = set()
+    used_paths: set[Path] = set()
+    vault_targets = 0
+    for line in names:
+        pieces = line.split('->')
+        if len(pieces) not in (1, 2):
+            raise LauncherError(f'Ungueltige Dateizuordnung: {line!r}')
+        raw_source = pieces[0].strip()
+        rel = _check_relative_path(raw_source)
+        raw_target = pieces[1].strip() if len(pieces) == 2 else raw_source + '.enc'
+        target_rel = _check_target(raw_target)
+        source = root.joinpath(*rel.parts)
+        target = root.joinpath(*target_rel.parts)
+        if source == target or source in used_paths or target in used_paths:
+            raise LauncherError('Doppelter Quell-/Zielpfad oder Quelle gleich Ziel in der Dateiliste.')
+        used_paths.update((source, target))
+        all_sources.add(raw_source)
+        if source in protected or target in protected:
+            raise LauncherError(f'Geschuetzte Launcher-Datei in Dateiliste: {line}')
         for path in (source, target):
             _check_no_symlinks(path, root)
             if not path.parent.is_dir():
                 raise LauncherError(f'Verzeichnis fuer Datei fehlt: {path.parent}')
-        if entry.purpose == 'vault-password' and target != master_target:
-            raise LauncherError('Vault-Passwort-Ziel stimmt nicht mit master_password_file ueberein.')
-        if entry.purpose == 'inventory' and (target.parent != inventory_dir or not target.name.endswith('.yml.enc')):
-            raise LauncherError('Inventory-Ziel muss in inventory_dir liegen und auf .yml.enc enden.')
-        entries.append((source, target, entry.purpose, entry.source))
-    return entries
+        if target == master_target:
+            purpose = 'vault-password'
+            vault_targets += 1
+        elif source.parent == inventory_dir and source.suffix in ('.yml', '.yaml'):
+            purpose = 'inventory'
+            expected = cfg.inventory_path(source.stem, root)
+            if target != expected:
+                raise LauncherError(f'Inventory-Ziel muss {expected} sein.')
+        else:
+            purpose = 'file'
+        mappings.append((source, target, purpose, raw_source))
+    if vault_targets > 1:
+        raise LauncherError('Master-Passwort-Ziel mehrfach in Dateiliste.')
+    if selected is not None and selected not in all_sources:
+        raise LauncherError(f'Datei steht nicht in encryption-files.txt: {selected}')
+    return [item for item in mappings if selected is None or item[3] == selected]
 
 
 def _regular_existing(path: Path) -> None:
@@ -63,7 +140,6 @@ def _regular_existing(path: Path) -> None:
 
 
 def _write_batch(contents: list[tuple[Path, bytes]], *, overwrite: bool = False) -> None:
-    """Stage all outputs and roll back changed paths on failure."""
     if not contents:
         return
     for target, _ in contents:
