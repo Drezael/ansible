@@ -12,7 +12,7 @@ import stat
 import tempfile
 
 from .config import LauncherConfig, resolve_project_relative
-from .crypto import (ENCRYPTED_PREFIX, MAX_FILE_BYTES, decrypt_bytes,
+from .crypto import (ENCRYPTED_PREFIX, MAGIC, MAGIC_V2, PURPOSE, MAX_FILE_BYTES, decrypt_bytes,
                      encrypt_bytes_v2_many, recipient_fingerprints, rewrap_v2_recipients)
 from .errors import LauncherError
 from .files import read_regular
@@ -198,6 +198,24 @@ def _validate_recipients(blob: bytes, purpose: str, allowed: set[str]) -> None:
         raise LauncherError('Verschluesselte Datei enthaelt nicht autorisierte RSA-Empfaenger.')
 
 
+
+def _stored_purpose(blob: bytes, expected: str) -> str:
+    """Recognize a legacy master ciphertext labeled 'file' without weakening others.
+
+    The ciphertext purpose byte is authenticated by AES-GCM. Its value alone
+    never authorizes access: caller must still verify recipients and decrypt.
+    Only the master-password mapping may use this compatibility path.
+    """
+    if expected != 'vault-password':
+        return expected
+    for magic in (MAGIC_V2, MAGIC):
+        if blob.startswith(magic):
+            if len(blob) > len(magic) and blob[len(magic)] == PURPOSE['file']:
+                return 'file'
+            break
+    return expected
+
+
 def encrypt_list(*, project_root: Path, cfg: LauncherConfig, file_list: list[str],
                  private_key_path: Path, selected: str | None = None,
                  force: bool = False, delete_source: bool = False) -> list[Path]:
@@ -212,8 +230,9 @@ def encrypt_list(*, project_root: Path, cfg: LauncherConfig, file_list: list[str
                 raise LauncherError(f'Bereits verschluesselt: {target} (erneut mit --force verschluesseln).')
             _regular_existing(target)
             old = read_regular(target)
-            _validate_recipients(old, purpose, set(keys))
-            decrypt_bytes(old, private, purpose)
+            stored_purpose = _stored_purpose(old, purpose)
+            _validate_recipients(old, stored_purpose, set(keys))
+            decrypt_bytes(old, private, stored_purpose)
         plaintext = read_regular(source, max_bytes=MAX_FILE_BYTES)
         if plaintext.startswith(ENCRYPTED_PREFIX):
             raise LauncherError(f'Quelldatei ist bereits verschluesselt: {source}')
@@ -242,8 +261,9 @@ def decrypt_list(*, project_root: Path, cfg: LauncherConfig, file_list: list[str
         if os.path.lexists(source) and not force:
             raise LauncherError(f'Klartextdatei existiert bereits (verwende --force): {source}')
         blob = read_regular(target)
-        _validate_recipients(blob, purpose, set(keys))
-        payloads.append((source, decrypt_bytes(blob, private, purpose)))
+        stored_purpose = _stored_purpose(blob, purpose)
+        _validate_recipients(blob, stored_purpose, set(keys))
+        payloads.append((source, decrypt_bytes(blob, private, stored_purpose)))
     _write_batch(payloads, overwrite=force)
     return [source for source, _ in payloads]
 
@@ -256,6 +276,12 @@ def sync_recipients(*, project_root: Path, cfg: LauncherConfig, file_list: list[
     for _, target, purpose, _ in entries:
         _regular_existing(target)
         blob = read_regular(target)
+        if _stored_purpose(blob, purpose) != purpose:
+            raise LauncherError(
+                f'Veralteter Dateityp der Master-Passwortdatei: {target}. '
+                'Bitte zuerst mit decrypt-files entschluesseln und danach '
+                'mit encrypt-files --force neu verschluesseln.'
+            )
         _validate_recipients(blob, purpose, set(keys))
         payloads.append((target, rewrap_v2_recipients(blob, private, list(keys.values()), purpose)))
     _write_batch(payloads, overwrite=True)
