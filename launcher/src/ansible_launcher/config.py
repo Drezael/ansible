@@ -32,7 +32,17 @@ class LauncherConfig:
         return resolve_project_relative(project_root, self.inventory_dir) / f'{name}.yml.enc'
 
     def master_path(self, project_root: Path) -> Path:
-        return resolve_project_relative(project_root, self.master_password_file)
+        """Return the encrypted master-password file, relative to the repo root.
+
+        The user setting names the master-password file (plaintext base name).
+        File operations append '.enc' to the source by default. Reuse that
+        convention here so encrypt, decrypt, status and playbook execution
+        resolve exactly the same ciphertext. Do not append twice when the user
+        explicitly configures a name already ending in '.enc'.
+        """
+        configured = self.master_password_file
+        encrypted = configured if configured.endswith('.enc') else configured + '.enc'
+        return resolve_project_relative(project_root, encrypted)
 
 
 def resolve_project_relative(root: Path, configured: str) -> Path:
