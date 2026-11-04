@@ -1,5 +1,0 @@
-all:
-  hosts:
-    test-host:
-      ansible_host: 37.27.154.91
-      
