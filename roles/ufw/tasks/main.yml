@@ -1,0 +1,6 @@
+---
+- name: Configure UFW firewall
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/configure.yml"
+  vars:
+    ufw_settings: "{{ host_specifications.firewall | default({}) }}"
