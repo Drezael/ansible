@@ -221,7 +221,7 @@
       no_log: true
 
     # ============================================================
-    # Verify SSH connection
+    # Verify SSH connection (also in check mode; read-only)
     # ============================================================
 
     - name: Verify Ansible SSH login
@@ -230,6 +230,7 @@
           - /usr/bin/id
           - -un
       become: false
+      check_mode: false
       register: server_ssh_login
       changed_when: false
       failed_when: >-
@@ -247,6 +248,7 @@
           - -k
       become: false
       changed_when: false
+      when: not ansible_check_mode
 
     - name: Verify sudo authentication
       ansible.builtin.command:
@@ -254,6 +256,7 @@
           - /usr/bin/id
           - -u
       become: true
+      check_mode: false
       register: server_sudo_login
       changed_when: false
       failed_when: >-
