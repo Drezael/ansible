@@ -1,20 +1,25 @@
 ---
-# ============================================================
-# Validate Chrony configuration
-# ============================================================
+- name: Normalize Chrony sources
+  ansible.builtin.set_fact:
+    server_chrony_sources: >-
+      {{ [server_ntp_server] if server_ntp_server is string else server_ntp_server | list }}
 
-- name: Validate NTP server
+- name: Validate Chrony source entries
   ansible.builtin.assert:
     that:
-      - server_ntp_server is string
-      - server_ntp_server | length > 0
-      - server_ntp_server | length <= 253
-      - server_ntp_server is match('^[A-Za-z0-9:][A-Za-z0-9._:-]*$')
-    fail_msg: "Invalid NTP server configuration."
+      - item is string
+      - item | length > 0
+      - item | length <= 253
+      - item is match('^[A-Za-z0-9:][A-Za-z0-9._:-]*$')
+    fail_msg: "Ungueltiger NTP-Server: {{ item }}"
+  loop: "{{ server_chrony_sources }}"
 
-# ============================================================
-# Prepare Chrony configuration
-# ============================================================
+- name: Validate Chrony source uniqueness
+  ansible.builtin.assert:
+    that:
+      - server_chrony_sources | length > 0
+      - server_chrony_sources | unique | list | length == server_chrony_sources | length
+    fail_msg: "Mindestens eine eindeutige NTP-Quelle ist erforderlich."
 
 - name: Ensure Chrony sources directory exists
   ansible.builtin.file:
@@ -23,6 +28,7 @@
     owner: root
     group: root
     mode: '0755'
+  register: chrony_directory
 
 - name: Ensure Chrony loads custom NTP sources
   ansible.builtin.lineinfile:
@@ -30,11 +36,8 @@
     regexp: '^[ \t]*#?[ \t]*sourcedir[ \t]+/etc/chrony/sources\.d[ \t]*$'
     line: 'sourcedir /etc/chrony/sources.d'
     state: present
+    backup: true
   register: chrony_source_directory
-
-# ============================================================
-# Disable default NTP sources
-# ============================================================
 
 - name: Disable default NTP sources in chrony.conf
   ansible.builtin.replace:
@@ -58,10 +61,6 @@
   register: chrony_ubuntu_sources
   when: chrony_ubuntu_sources_file.stat.isreg | default(false)
 
-# ============================================================
-# Disable DHCP-provided NTP sources
-# ============================================================
-
 - name: Disable DHCP NTP sources
   ansible.builtin.replace:
     path: /etc/chrony/chrony.conf
@@ -70,23 +69,26 @@
     backup: true
   register: chrony_dhcp_sources
 
-# ============================================================
-# Configure Ansible NTP source
-# ============================================================
-
-- name: Configure Chrony NTP source
+- name: Configure Chrony NTP sources
   ansible.builtin.copy:
     dest: /etc/chrony/sources.d/99-ansible.sources
     owner: root
     group: root
     mode: '0644'
+    backup: true
     content: |
-      {{ 'pool' if server_ntp_server == 'pool.ntp.org' or server_ntp_server.endswith('.pool.ntp.org') else 'server' }} {{ server_ntp_server }} iburst
+      # Managed by Ansible; edit host_specs.ntp_server instead.
+      {% for source in server_chrony_sources %}
+      {{ 'pool' if source == 'pool.ntp.org' or source.endswith('.pool.ntp.org') else 'server' }} {{ source }} iburst
+      {% endfor %}
   register: chrony_ntp_configuration
 
-# ============================================================
-# Validate Chrony configuration
-# ============================================================
+- name: Determine whether Chrony configuration would change
+  ansible.builtin.set_fact:
+    chrony_configuration_pending: >-
+      {{ chrony_directory.changed or chrony_source_directory.changed or
+         chrony_default_sources.changed or (chrony_ubuntu_sources.changed | default(false)) or
+         chrony_dhcp_sources.changed or chrony_ntp_configuration.changed }}
 
 - name: Validate Chrony configuration syntax
   ansible.builtin.command:
@@ -96,10 +98,8 @@
       - -f
       - /etc/chrony/chrony.conf
   changed_when: false
-
-# ============================================================
-# Disable conflicting time services
-# ============================================================
+  check_mode: false
+  when: not ansible_check_mode or not chrony_configuration_pending | bool
 
 - name: Gather service information
   ansible.builtin.service_facts:
@@ -111,34 +111,24 @@
     state: stopped
   when: "'systemd-timesyncd.service' in ansible_facts.services"
 
-# ============================================================
-# Enable and start Chrony
-# ============================================================
-
 - name: Enable and start Chrony
   ansible.builtin.systemd_service:
     name: chrony.service
     enabled: true
-    state: >-
-      {{ 'restarted' if
-         chrony_source_directory.changed
-         or chrony_default_sources.changed
-         or (chrony_ubuntu_sources.changed | default(false))
-         or chrony_dhcp_sources.changed
-         or chrony_ntp_configuration.changed
-         else 'started' }}
-
-# ============================================================
-# Verify Chrony synchronization
-# ============================================================
+    state: "{{ 'restarted' if chrony_configuration_pending | bool else 'started' }}"
+  when: not ansible_check_mode
 
 - name: Wait for Chrony synchronization
   ansible.builtin.command:
     argv:
       - /usr/bin/chronyc
       - waitsync
-      - "12"
+      - "{{ server_ntp_waitsync_attempts | int }}"
+  register: chrony_waitsync
   changed_when: false
+  failed_when: server_ntp_require_sync | bool and chrony_waitsync.rc != 0
+  check_mode: false
+  when: not ansible_check_mode or not chrony_configuration_pending | bool
 
 - name: Read Chrony tracking information
   ansible.builtin.command:
@@ -147,15 +137,13 @@
       - tracking
   register: chrony_tracking
   changed_when: false
-
-# ============================================================
-# Report Chrony status
-# ============================================================
+  check_mode: false
+  when: not ansible_check_mode or not chrony_configuration_pending | bool
 
 - name: Report Chrony configuration
   ansible.builtin.debug:
     msg:
-      - "Chrony configured successfully."
-      - "NTP source: {{ server_ntp_server }}"
-      - "Synchronization verified."
-      - "{{ chrony_tracking.stdout }}"
+      - "NTP sources: {{ server_chrony_sources | join(', ') }}"
+      - "Changes pending (check mode): {{ ansible_check_mode and chrony_configuration_pending | bool }}"
+      - "Synchronization required: {{ server_ntp_require_sync }}"
+      - "{{ chrony_tracking.stdout | default('Tracking not checked because configuration changes are pending.') }}"

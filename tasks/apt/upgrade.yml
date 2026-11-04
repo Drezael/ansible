@@ -1,7 +1,7 @@
 ---
 - name: Upgrade installed packages
   ansible.builtin.apt:
-    upgrade: safe
+    upgrade: "{{ apt_upgrade_mode | default('safe') }}"
     force_apt_get: true
     fail_on_autoremove: true
-    lock_timeout: 300
+    lock_timeout: "{{ apt_lock_timeout | default(300) | int }}"

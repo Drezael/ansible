@@ -1,55 +1,50 @@
 ---
-# ============================================================
-# Validate reboot configuration
-# ============================================================
-
 - name: Validate reboot configuration
   ansible.builtin.assert:
     that:
       - server_reboot_if_required is boolean
-      - server_reboot_timeout | int > 0
-    fail_msg: >-
-      Invalid reboot configuration.
-      reboot_if_required must be a boolean
-      and reboot_timeout must be greater than zero.
-
-# ============================================================
-# Check reboot requirement
-# ============================================================
+      - server_reboot_timeout is integer
+      - server_reboot_timeout >= 60
+    fail_msg: "reboot_if_required muss boolesch sein und reboot_timeout mindestens 60 Sekunden betragen."
 
 - name: Check whether system reboot is required
   ansible.builtin.stat:
     path: /run/reboot-required
   register: system_reboot_required
 
-# ============================================================
-# Reboot system
-# ============================================================
+- name: Report pending reboot if automatic reboot is disabled
+  ansible.builtin.debug:
+    msg: "Reboot erforderlich; automatische Neustarts sind deaktiviert."
+  when:
+    - system_reboot_required.stat.exists
+    - not server_reboot_if_required | bool
 
-- name: Reboot system if required
+- name: Report pending reboot during check mode
+  ansible.builtin.debug:
+    msg: "Reboot erforderlich; im Check-Modus wird kein Neustart ausgefuehrt."
+  when:
+    - system_reboot_required.stat.exists
+    - server_reboot_if_required | bool
+    - ansible_check_mode
+
+- name: Reboot system if explicitly permitted and required
   ansible.builtin.reboot:
     msg: "System reboot initiated by Ansible"
     connect_timeout: 15
-    reboot_timeout: "{{ server_reboot_timeout | int }}"
+    reboot_timeout: "{{ server_reboot_timeout }}"
     post_reboot_delay: 10
     test_command: /usr/bin/true
   when:
     - system_reboot_required.stat.exists
     - server_reboot_if_required | bool
-
-# ============================================================
-# Refresh system facts
-# ============================================================
+    - not ansible_check_mode
 
 - name: Refresh system facts after reboot
   ansible.builtin.setup:
   when:
     - system_reboot_required.stat.exists
     - server_reboot_if_required | bool
-
-# ============================================================
-# Verify reboot completed
-# ============================================================
+    - not ansible_check_mode
 
 - name: Check reboot requirement after restart
   ansible.builtin.stat:
@@ -58,27 +53,14 @@
   when:
     - system_reboot_required.stat.exists
     - server_reboot_if_required | bool
+    - not ansible_check_mode
 
 - name: Verify reboot requirement is cleared
   ansible.builtin.assert:
     that:
       - not system_reboot_required_after.stat.exists
-    fail_msg: >-
-      The system was rebooted but still reports
-      that another reboot is required.
+    fail_msg: "Nach dem Reboot ist weiterhin ein weiterer Reboot erforderlich."
   when:
     - system_reboot_required.stat.exists
     - server_reboot_if_required | bool
-
-# ============================================================
-# Report pending reboot
-# ============================================================
-
-- name: Report pending reboot when disabled
-  ansible.builtin.debug:
-    msg: >-
-      System reboot is required but automatic
-      reboot is disabled.
-  when:
-    - system_reboot_required.stat.exists
-    - not (server_reboot_if_required | bool)
+    - not ansible_check_mode

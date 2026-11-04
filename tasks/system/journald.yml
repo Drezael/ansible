@@ -1,21 +1,13 @@
 ---
-# ============================================================
-# Validate Journald settings
-# ============================================================
-
 - name: Validate Journald storage settings
   ansible.builtin.assert:
     that:
-      - server_journald_system_max_use is match('^[0-9]+[KMGT]$')
-      - server_journald_system_keep_free is match('^[0-9]+[KMGT]$')
-      - server_journald_system_max_file_size is match('^[0-9]+[KMGT]$')
-      - server_journald_max_retention is match('^[0-9]+(?:s|sec|min|h|day|week|month|year)$')
-      - server_journald_max_file_sec is match('^[0-9]+(?:s|sec|min|h|day|week|month|year)$')
-    fail_msg: "Invalid Journald configuration."
-
-# ============================================================
-# Prepare Journald configuration
-# ============================================================
+      - server_journald_system_max_use is match('^[1-9][0-9]*[KMGT]$')
+      - server_journald_system_keep_free is match('^[1-9][0-9]*[KMGT]$')
+      - server_journald_system_max_file_size is match('^[1-9][0-9]*[KMGT]$')
+      - server_journald_max_retention is match('^[1-9][0-9]*(?:s|sec|min|h|day|week|month|year)$')
+      - server_journald_max_file_sec is match('^[1-9][0-9]*(?:s|sec|min|h|day|week|month|year)$')
+    fail_msg: "Ungueltige Journald-Einstellungen."
 
 - name: Create Journald configuration directory
   ansible.builtin.file:
@@ -25,16 +17,13 @@
     group: root
     mode: '0755'
 
-# ============================================================
-# Configure Journald
-# ============================================================
-
 - name: Configure Journald retention
   ansible.builtin.copy:
     dest: /etc/systemd/journald.conf.d/99-ansible.conf
     owner: root
     group: root
     mode: '0644'
+    backup: true
     content: |
       [Journal]
       Storage=persistent
@@ -45,15 +34,13 @@
       MaxFileSec={{ server_journald_max_file_sec }}
   register: journald_configuration
 
-# ============================================================
-# Apply Journald configuration
-# ============================================================
-
 - name: Restart Journald after configuration changes
   ansible.builtin.systemd_service:
     name: systemd-journald.service
     state: restarted
-  when: journald_configuration.changed
+  when:
+    - journald_configuration.changed
+    - not ansible_check_mode
 
 - name: Flush journal to persistent storage
   ansible.builtin.command:
@@ -61,11 +48,25 @@
       - /usr/bin/journalctl
       - --flush
   changed_when: true
-  when: journald_configuration.changed
+  when:
+    - journald_configuration.changed
+    - not ansible_check_mode
 
-# ============================================================
-# Verify Journald
-# ============================================================
+- name: Read managed Journald configuration
+  ansible.builtin.slurp:
+    src: /etc/systemd/journald.conf.d/99-ansible.conf
+  register: journald_managed_content
+  when: not ansible_check_mode or not journald_configuration.changed
+
+- name: Verify managed Journald configuration
+  ansible.builtin.assert:
+    that:
+      - "'SystemMaxUse=' ~ server_journald_system_max_use in (journald_managed_content.content | b64decode)"
+      - "'SystemKeepFree=' ~ server_journald_system_keep_free in (journald_managed_content.content | b64decode)"
+      - "'SystemMaxFileSize=' ~ server_journald_system_max_file_size in (journald_managed_content.content | b64decode)"
+      - "'MaxRetentionSec=' ~ server_journald_max_retention in (journald_managed_content.content | b64decode)"
+      - "'MaxFileSec=' ~ server_journald_max_file_sec in (journald_managed_content.content | b64decode)"
+  when: not ansible_check_mode or not journald_configuration.changed
 
 - name: Read Journald disk usage
   ansible.builtin.command:
@@ -74,6 +75,7 @@
       - --disk-usage
   register: journald_disk_usage
   changed_when: false
+  check_mode: false
 
 - name: Report Journald configuration
   ansible.builtin.debug:
@@ -81,4 +83,5 @@
       - "SystemMaxUse: {{ server_journald_system_max_use }}"
       - "SystemKeepFree: {{ server_journald_system_keep_free }}"
       - "MaxRetentionSec: {{ server_journald_max_retention }}"
+      - "Configuration pending (check mode): {{ ansible_check_mode and journald_configuration.changed }}"
       - "{{ journald_disk_usage.stdout }}"

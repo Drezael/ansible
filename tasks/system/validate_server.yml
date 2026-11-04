@@ -1,0 +1,90 @@
+---
+# Central validation before the first mutable server task.
+- name: Validate server identity and base configuration
+  ansible.builtin.assert:
+    that:
+      - host_specs is mapping
+      - host_specs.hostname is defined
+      - host_specs.hostname is string
+      - host_specs.hostname is match('^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
+      - host_specs.domain is defined
+      - host_specs.domain is string
+      - host_specs.domain | length <= 253
+      - host_specs.domain is match('^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$')
+      - (host_specs.locale | default(default.locale)) is string
+      - (host_specs.locale | default(default.locale)) is match('^[a-z]{2,3}_[A-Z]{2}\\.UTF-8$')
+      - (host_specs.timezone | default(default.timezone)) is string
+      - (host_specs.timezone | default(default.timezone)) is match('^[A-Za-z][A-Za-z0-9_+\\-]*(?:/[A-Za-z0-9_+\\-]+)+$|^UTC$')
+    fail_msg: "Ungueltige Host-, Domain-, Locale- oder Zeitzonenparameter."
+
+- name: Validate APT maintenance settings
+  ansible.builtin.assert:
+    that:
+      - (host_specs.apt_update_cache | default(default.apt_update_cache)) is boolean
+      - (host_specs.apt_upgrade | default(default.apt_upgrade)) is boolean
+      - (host_specs.apt_cache_valid_time | default(default.apt_cache_valid_time)) is integer
+      - (host_specs.apt_cache_valid_time | default(default.apt_cache_valid_time)) >= 0
+      - (host_specs.apt_lock_timeout | default(default.apt_lock_timeout)) is integer
+      - (host_specs.apt_lock_timeout | default(default.apt_lock_timeout)) >= 1
+      - (host_specs.apt_upgrade_mode | default(default.apt_upgrade_mode)) in ['no', 'yes', 'safe', 'full', 'dist']
+    fail_msg: "Ungueltige APT-Einstellungen in host_specs."
+
+- name: Validate Chrony settings
+  ansible.builtin.assert:
+    that:
+      - (host_specs.ntp_server | default(default.ntp_server)) is string or ((host_specs.ntp_server | default(default.ntp_server)) is sequence and (host_specs.ntp_server | default(default.ntp_server)) is not mapping)
+      - (host_specs.ntp_server | default(default.ntp_server)) | length > 0
+      - (host_specs.ntp_waitsync_attempts | default(default.ntp_waitsync_attempts)) is integer
+      - (host_specs.ntp_waitsync_attempts | default(default.ntp_waitsync_attempts)) >= 1
+      - (host_specs.ntp_waitsync_attempts | default(default.ntp_waitsync_attempts)) <= 60
+      - (host_specs.ntp_require_sync | default(default.ntp_require_sync)) is boolean
+    fail_msg: "Ungueltige Chrony-Einstellungen."
+
+- name: Validate each NTP source before system changes
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+      - item | length <= 253
+      - item is match('^[A-Za-z0-9:][A-Za-z0-9._:-]*$')
+    fail_msg: "Ungueltige NTP-Quelle in host_specs."
+  loop: "{{ [host_specs.ntp_server | default(default.ntp_server)] if (host_specs.ntp_server | default(default.ntp_server)) is string else (host_specs.ntp_server | default(default.ntp_server)) | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate base package declarations
+  ansible.builtin.assert:
+    that:
+      - package_definitions.server_packages is defined
+      - package_definitions.server_packages is sequence
+      - package_definitions.server_packages is not string
+      - package_definitions.server_packages is not mapping
+      - package_definitions.server_packages | length > 0
+    fail_msg: "Unguelige Server-Paketliste in vars/packages.yml."
+
+- name: Validate Journald settings
+  ansible.builtin.assert:
+    that:
+      - (host_specs.journald_system_max_use | default(default.journald_system_max_use)) is string
+      - (host_specs.journald_system_max_use | default(default.journald_system_max_use)) is match('^[1-9][0-9]*[KMGT]$')
+      - (host_specs.journald_system_keep_free | default(default.journald_system_keep_free)) is string
+      - (host_specs.journald_system_keep_free | default(default.journald_system_keep_free)) is match('^[1-9][0-9]*[KMGT]$')
+      - (host_specs.journald_system_max_file_size | default(default.journald_system_max_file_size)) is string
+      - (host_specs.journald_system_max_file_size | default(default.journald_system_max_file_size)) is match('^[1-9][0-9]*[KMGT]$')
+      - (host_specs.journald_max_retention | default(default.journald_max_retention)) is string
+      - (host_specs.journald_max_retention | default(default.journald_max_retention)) is match('^[1-9][0-9]*(?:s|sec|min|h|day|week|month|year)$')
+      - (host_specs.journald_max_file_sec | default(default.journald_max_file_sec)) is string
+      - (host_specs.journald_max_file_sec | default(default.journald_max_file_sec)) is match('^[1-9][0-9]*(?:s|sec|min|h|day|week|month|year)$')
+    fail_msg: "Ungueltige Journald-Einstellungen."
+
+- name: Validate Logrotate and reboot settings
+  ansible.builtin.assert:
+    that:
+      - (host_specs.logrotate_frequency | default(default.logrotate_frequency)) in ['daily', 'weekly', 'monthly', 'yearly']
+      - (host_specs.logrotate_rotate | default(default.logrotate_rotate)) is integer
+      - (host_specs.logrotate_rotate | default(default.logrotate_rotate)) >= 1
+      - (host_specs.logrotate_compress | default(default.logrotate_compress)) is boolean
+      - (host_specs.reboot_if_required | default(default.reboot_if_required)) is boolean
+      - (host_specs.reboot_timeout | default(default.reboot_timeout)) is integer
+      - (host_specs.reboot_timeout | default(default.reboot_timeout)) >= 60
+    fail_msg: "Ungueltige Logrotate- oder Reboot-Einstellungen."

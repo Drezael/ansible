@@ -1,19 +1,12 @@
 ---
-# ============================================================
-# Validate Logrotate configuration
-# ============================================================
-
 - name: Validate Logrotate settings
   ansible.builtin.assert:
     that:
       - server_logrotate_frequency in ['daily', 'weekly', 'monthly', 'yearly']
-      - server_logrotate_rotate | int >= 1
+      - server_logrotate_rotate is integer
+      - server_logrotate_rotate >= 1
       - server_logrotate_compress is boolean
-    fail_msg: "Invalid Logrotate configuration."
-
-# ============================================================
-# Remove obsolete Ansible policy block
-# ============================================================
+    fail_msg: "Ungueltige Logrotate-Einstellungen."
 
 - name: Remove previous Ansible Logrotate policy block
   ansible.builtin.blockinfile:
@@ -21,10 +14,7 @@
     marker: '# {mark} ANSIBLE MANAGED LOGROTATE POLICY'
     state: absent
     backup: true
-
-# ============================================================
-# Configure rotation frequency
-# ============================================================
+  register: logrotate_legacy_cleanup
 
 - name: Configure Logrotate frequency
   ansible.builtin.lineinfile:
@@ -34,46 +24,39 @@
     insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
     state: present
     backup: true
-
-# ============================================================
-# Configure rotation count
-# ============================================================
+  register: logrotate_frequency_configuration
 
 - name: Configure Logrotate retention count
   ansible.builtin.lineinfile:
     path: /etc/logrotate.conf
     regexp: '^[ \t]*rotate[ \t]+[0-9]+[ \t]*$'
-    line: "rotate {{ server_logrotate_rotate | int }}"
+    line: "rotate {{ server_logrotate_rotate }}"
     insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
     state: present
     backup: true
-
-# ============================================================
-# Configure compression
-# ============================================================
+  register: logrotate_retention_configuration
 
 - name: Configure Logrotate compression
   ansible.builtin.lineinfile:
     path: /etc/logrotate.conf
     regexp: '^[ \t]*#?[ \t]*(?:compress|nocompress)[ \t]*$'
-    line: "{{ 'compress' if server_logrotate_compress | bool else 'nocompress' }}"
+    line: "{{ 'compress' if server_logrotate_compress else 'nocompress' }}"
     insertbefore: '^[ \t]*include[ \t]+/etc/logrotate\.d[ \t]*$'
     state: present
     backup: true
+  register: logrotate_compression_configuration
 
-# ============================================================
-# Enable Logrotate timer
-# ============================================================
+- name: Determine whether Logrotate configuration would change
+  ansible.builtin.set_fact:
+    logrotate_configuration_pending: >-
+      {{ logrotate_legacy_cleanup.changed or logrotate_frequency_configuration.changed or
+         logrotate_retention_configuration.changed or logrotate_compression_configuration.changed }}
 
 - name: Enable Logrotate timer
   ansible.builtin.systemd_service:
     name: logrotate.timer
     enabled: true
     state: started
-
-# ============================================================
-# Validate Logrotate configuration
-# ============================================================
 
 - name: Validate Logrotate configuration
   ansible.builtin.command:
@@ -82,10 +65,8 @@
       - --debug
       - /etc/logrotate.conf
   changed_when: false
-
-# ============================================================
-# Verify Logrotate timer
-# ============================================================
+  check_mode: false
+  when: not ansible_check_mode or not logrotate_configuration_pending | bool
 
 - name: Verify Logrotate timer
   ansible.builtin.command:
@@ -95,13 +76,10 @@
       - logrotate.timer
   register: logrotate_timer_status
   changed_when: false
+  check_mode: false
   failed_when: >-
-    logrotate_timer_status.rc != 0
-    or logrotate_timer_status.stdout | trim != 'enabled'
-
-# ============================================================
-# Report Logrotate configuration
-# ============================================================
+    logrotate_timer_status.rc != 0 or logrotate_timer_status.stdout | trim != 'enabled'
+  when: not ansible_check_mode
 
 - name: Report Logrotate configuration
   ansible.builtin.debug:
@@ -109,3 +87,4 @@
       - "Frequency: {{ server_logrotate_frequency }}"
       - "Rotations: {{ server_logrotate_rotate }}"
       - "Compression: {{ server_logrotate_compress }}"
+      - "Changes pending (check mode): {{ ansible_check_mode and logrotate_configuration_pending | bool }}"

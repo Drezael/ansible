@@ -11,30 +11,38 @@
     cmd: /usr/bin/locale -a
   register: available_locales
   changed_when: false
+  check_mode: false
+
+- name: Determine whether locale generation is required
+  ansible.builtin.set_fact:
+    locale_generation_needed: >-
+      {{ locale_definition.changed or
+         (server_locale | lower | replace('-', '')) not in
+         (available_locales.stdout | lower | replace('-', '')) }}
 
 - name: Generate system locale
   ansible.builtin.command:
     cmd: /usr/sbin/locale-gen
-  when: >-
-    locale_definition.changed
-    or (server_locale | lower | replace('-', ''))
-       not in (available_locales.stdout | lower | replace('-', ''))
+  when: locale_generation_needed | bool
 
 - name: Verify generated locale
   ansible.builtin.command:
     cmd: /usr/bin/locale -a
   register: verified_locales
   changed_when: false
+  check_mode: false
   failed_when: >-
-    verified_locales.rc != 0
-    or (server_locale | lower | replace('-', ''))
-       not in (verified_locales.stdout | lower | replace('-', ''))
+    verified_locales.rc != 0 or
+    (server_locale | lower | replace('-', '')) not in
+    (verified_locales.stdout | lower | replace('-', ''))
+  when: not ansible_check_mode or not locale_generation_needed | bool
 
 - name: Read current default locale
   ansible.builtin.command:
     cmd: /usr/bin/localectl status
   register: current_system_locale
   changed_when: false
+  check_mode: false
 
 - name: Configure default system locale
   ansible.builtin.command:
@@ -48,6 +56,10 @@
     cmd: /usr/bin/localectl status
   register: verified_default_locale
   changed_when: false
+  check_mode: false
   failed_when: >-
-    verified_default_locale.rc != 0
-    or ('LANG=' ~ server_locale) not in verified_default_locale.stdout
+    verified_default_locale.rc != 0 or
+    ('LANG=' ~ server_locale) not in verified_default_locale.stdout
+  when: >-
+    not ansible_check_mode or
+    ('LANG=' ~ server_locale) in current_system_locale.stdout

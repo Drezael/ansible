@@ -1,16 +1,15 @@
 ---
-# ============================================================
-# Update APT package cache
-# ============================================================
-
 - name: Update APT package cache
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/apt/update_cache.yml"
-
-# ============================================================
-# Upgrade installed packages
-# ============================================================
+  vars:
+    apt_cache_valid_time: "{{ server_apt_cache_valid_time }}"
+  when: server_apt_update_cache | bool
 
 - name: Upgrade installed packages
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/apt/upgrade.yml"
+  vars:
+    apt_upgrade_mode: "{{ server_apt_upgrade_mode }}"
+    apt_lock_timeout: "{{ server_apt_lock_timeout }}"
+  when: server_apt_upgrade | bool

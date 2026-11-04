@@ -1,8 +1,4 @@
 ---
-# ============================================================
-# Load variables
-# ============================================================
-
 - name: Load default variables
   ansible.builtin.include_vars:
     file: "{{ roles_dir }}/server/vars/default.yml"
@@ -13,17 +9,19 @@
     file: "{{ vars_dir }}/packages.yml"
     name: package_definitions
 
-# ============================================================
-# Update system
-# ============================================================
+- name: Validate server role parameters
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/system/validate_server.yml"
 
 - name: Update system packages
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/update.yml"
-
-# ============================================================
-# Install standard packages
-# ============================================================
+  vars:
+    server_apt_update_cache: "{{ host_specs.apt_update_cache | default(default.apt_update_cache) }}"
+    server_apt_cache_valid_time: "{{ host_specs.apt_cache_valid_time | default(default.apt_cache_valid_time) }}"
+    server_apt_upgrade: "{{ host_specs.apt_upgrade | default(default.apt_upgrade) }}"
+    server_apt_upgrade_mode: "{{ host_specs.apt_upgrade_mode | default(default.apt_upgrade_mode) }}"
+    server_apt_lock_timeout: "{{ host_specs.apt_lock_timeout | default(default.apt_lock_timeout) }}"
 
 - name: Install standard server packages
   ansible.builtin.include_tasks:
@@ -31,19 +29,11 @@
   vars:
     host_packages: "{{ package_definitions.server_packages }}"
 
-# ============================================================
-# Configure hostname
-# ============================================================
-
 - name: Configure hostname
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/hostname.yml"
   vars:
     host_name: "{{ host_specs.hostname }}"
-
-# ============================================================
-# Configure local hosts
-# ============================================================
 
 - name: Configure local hosts
   ansible.builtin.include_tasks:
@@ -52,19 +42,11 @@
     host_name: "{{ host_specs.hostname }}"
     host_domain: "{{ host_specs.domain }}"
 
-# ============================================================
-# Configure locale
-# ============================================================
-
 - name: Configure system locale
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/locale.yml"
   vars:
     host_locale: "{{ host_specs.locale | default(default.locale) }}"
-
-# ============================================================
-# Configure timezone
-# ============================================================
 
 - name: Configure system timezone
   ansible.builtin.include_tasks:
@@ -72,19 +54,13 @@
   vars:
     host_timezone: "{{ host_specs.timezone | default(default.timezone) }}"
 
-# ============================================================
-# Configure Chrony
-# ============================================================
-
 - name: Configure NTP time synchronization
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/ntp.yml"
   vars:
     host_ntp_server: "{{ host_specs.ntp_server | default(default.ntp_server) }}"
-
-# ============================================================
-# Configure Journald
-# ============================================================
+    host_ntp_waitsync_attempts: "{{ host_specs.ntp_waitsync_attempts | default(default.ntp_waitsync_attempts) }}"
+    host_ntp_require_sync: "{{ host_specs.ntp_require_sync | default(default.ntp_require_sync) }}"
 
 - name: Configure system journal
   ansible.builtin.include_tasks:
@@ -96,10 +72,6 @@
     host_journald_max_retention: "{{ host_specs.journald_max_retention | default(default.journald_max_retention) }}"
     host_journald_max_file_sec: "{{ host_specs.journald_max_file_sec | default(default.journald_max_file_sec) }}"
 
-# ============================================================
-# Configure Logrotate
-# ============================================================
-
 - name: Configure logrotate
   ansible.builtin.include_tasks:
     file: "{{ roles_dir }}/server/tasks/logrotate.yml"
@@ -107,10 +79,6 @@
     host_logrotate_frequency: "{{ host_specs.logrotate_frequency | default(default.logrotate_frequency) }}"
     host_logrotate_rotate: "{{ host_specs.logrotate_rotate | default(default.logrotate_rotate) }}"
     host_logrotate_compress: "{{ host_specs.logrotate_compress | default(default.logrotate_compress) }}"
-
-# ============================================================
-# Reboot if required
-# ============================================================
 
 - name: Reboot server if required
   ansible.builtin.include_tasks:

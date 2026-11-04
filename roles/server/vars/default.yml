@@ -1,20 +1,18 @@
 ---
-# ============================================================
-# System defaults
-# ============================================================
-
 locale: de_DE.UTF-8
 timezone: Europe/Berlin
 
-# ============================================================
-# Chrony
-# ============================================================
+# Package maintenance: keep existing upgrade behaviour, but allow host overrides.
+apt_update_cache: true
+apt_cache_valid_time: 3600
+apt_upgrade: true
+apt_upgrade_mode: safe
+apt_lock_timeout: 300
 
+# Chrony supports a single hostname (legacy) or a list of hostnames.
 ntp_server: pool.ntp.org
-
-# ============================================================
-# Journald
-# ============================================================
+ntp_waitsync_attempts: 12
+ntp_require_sync: true
 
 journald_system_max_use: 512M
 journald_system_keep_free: 1G
@@ -22,17 +20,10 @@ journald_system_max_file_size: 64M
 journald_max_retention: 30day
 journald_max_file_sec: 1day
 
-# ============================================================
-# Logrotate
-# ============================================================
-
 logrotate_frequency: weekly
 logrotate_rotate: 4
 logrotate_compress: false
 
-# ============================================================
-# Reboot
-# ============================================================
-
-reboot_if_required: true
+# No automatic restart without an explicit host-level opt-in.
+reboot_if_required: false
 reboot_timeout: 900
