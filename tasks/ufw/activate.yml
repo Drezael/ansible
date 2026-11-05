@@ -49,7 +49,7 @@
   when:
     - not ansible_check_mode
     - ufw_enabled
-    - ufw_current_status.stdout | trim == 'Status: inactive'
+    - "ufw_current_status.stdout | trim == 'Status: inactive'"
 
 # ============================================================
 # Disable UFW
@@ -65,7 +65,7 @@
   when:
     - not ansible_check_mode
     - not ufw_enabled
-    - ufw_current_status.stdout | trim == 'Status: active'
+    - "ufw_current_status.stdout | trim == 'Status: active'"
 
 # ============================================================
 # Report planned change in check mode
