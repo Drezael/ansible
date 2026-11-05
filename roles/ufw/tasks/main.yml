@@ -42,6 +42,29 @@
     ufw_outgoing_policy: "{{ host_specifications.firewall.outgoing_policy | default(default.outgoing_policy) }}"
 
 # ============================================================
+# Configure UFW firewall rules
+# ============================================================
+
+- name: Configure UFW firewall rules
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/rules.yml"
+  vars:
+    ufw_rules: "{{ (host_specifications.firewall | default({})).rules | default([]) }}"
+    ufw_connection_port: "{{ ansible_port | default(22) }}"
+    ufw_require_ssh_rule: >-
+      {{
+        (
+          (host_specifications.firewall | default({})).enabled
+          | default(default.enabled)
+        )
+        and
+        (
+          (host_specifications.firewall | default({})).incoming_policy
+          | default(default.incoming_policy)
+        ) in ['deny', 'reject']
+      }}
+
+# ============================================================
 # Configure UFW activation state
 # ============================================================
 
