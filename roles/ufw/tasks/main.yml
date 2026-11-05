@@ -2,23 +2,30 @@
 # ============================================================
 # Load role default variable
 # ============================================================
-
 - name: Load default variables
   ansible.builtin.include_vars:
     file: "{{ roles_dir }}/ufw/vars/default.yml"
     name: default
 
+
+# ============================================================
+# Load package definitions
+# ============================================================
+- name: Load package definitions
+  ansible.builtin.include_vars:
+    file: "{{ vars_dir }}/packages.yml"
+    name: package_definitions
+
 # ============================================================
 # Install firewall packages
 # ============================================================
-
 - name: Install firewall packages
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/apt/install.yml"
   vars:
-    apt_install_packages: "{{ firewall_packages }}"
+    apt_install_packages: "{{ package_definitions.firewall_packages }}"
     packages_state: present
-  when: firewall_packages | length > 0
+  when: package_definitions.firewall_packages | length > 0
   
 
 
