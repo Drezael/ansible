@@ -31,17 +31,6 @@
   when: package_definitions.firewall_packages | length > 0
 
 # ============================================================
-# Configure UFW default policies
-# ============================================================
-
-- name: Configure UFW default policies
-  ansible.builtin.include_tasks:
-    file: "{{ tasks_dir }}/ufw/policies.yml"
-  vars:
-    ufw_incoming_policy: "{{ host_specifications.firewall.incoming_policy | default(default.incoming_policy) }}"
-    ufw_outgoing_policy: "{{ host_specifications.firewall.outgoing_policy | default(default.outgoing_policy) }}"
-
-# ============================================================
 # Configure UFW firewall rules
 # ============================================================
 
@@ -63,6 +52,17 @@
           | default(default.incoming_policy)
         ) in ['deny', 'reject']
       }}
+
+# ============================================================
+# Configure UFW default policies
+# ============================================================
+
+- name: Configure UFW default policies
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/policies.yml"
+  vars:
+    ufw_incoming_policy: "{{ host_specifications.firewall.incoming_policy | default(default.incoming_policy) }}"
+    ufw_outgoing_policy: "{{ host_specifications.firewall.outgoing_policy | default(default.outgoing_policy) }}"
 
 # ============================================================
 # Configure UFW activation state
