@@ -99,7 +99,7 @@
       ansible.builtin.command:
         argv:
           - ansible-playbook
-          - "{{ playbooks_dir }}/generate_secrets.yml"
+          - "{{ playbooks_dir }}/server.secrets.generate.yml"
           - --extra-vars
           - "hostname={{ inventory_hostname }}"
         chdir: "{{ base_dir }}"
