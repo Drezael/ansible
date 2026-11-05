@@ -8,8 +8,7 @@ users:
   ansible:
     state: present
 firewall:
-  default_incoming: deny
-  default_outgoing: allow
+  enabled: true
   rules:
     # SSH
     - action: allow

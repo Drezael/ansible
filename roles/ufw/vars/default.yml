@@ -1,3 +1,4 @@
 ---
+enabled: true
 incoming_policy: deny
 outgoing_policy: allow
