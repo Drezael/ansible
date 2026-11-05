@@ -1,6 +1,42 @@
 ---
 # ============================================================
-# Enable UFW firewall
+# Validate activation parameters
+# ============================================================
+
+- name: Validate UFW activation parameters
+  ansible.builtin.assert:
+    that:
+      - ufw_enabled is defined
+      - ufw_enabled is boolean
+    fail_msg: "ufw_enabled must be true or false."
+
+# ============================================================
+# Read current UFW state
+# ============================================================
+
+- name: Read current UFW status
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/ufw
+      - status
+  environment:
+    LC_ALL: C
+  register: ufw_current_status
+  changed_when: false
+  check_mode: false
+
+# ============================================================
+# Validate current UFW status
+# ============================================================
+
+- name: Validate current UFW status
+  ansible.builtin.assert:
+    that:
+      - "(ufw_current_status.stdout | trim) in ['Status: active', 'Status: inactive']"
+    fail_msg: "Unable to determine current UFW status."
+
+# ============================================================
+# Enable UFW
 # ============================================================
 
 - name: Enable UFW firewall
@@ -9,15 +45,14 @@
       - /usr/sbin/ufw
       - --force
       - enable
-  register: ufw_enable_result
   changed_when: true
   when:
     - not ansible_check_mode
-    - ufw_settings.enabled | default(false) | bool
-    - "'Status: inactive' in ufw_initial_status.stdout"
+    - ufw_enabled
+    - ufw_current_status.stdout | trim == 'Status: inactive'
 
 # ============================================================
-# Disable UFW firewall
+# Disable UFW
 # ============================================================
 
 - name: Disable UFW firewall
@@ -26,9 +61,49 @@
       - /usr/sbin/ufw
       - --force
       - disable
-  register: ufw_disable_result
   changed_when: true
   when:
     - not ansible_check_mode
-    - not (ufw_settings.enabled | default(false) | bool)
-    - "'Status: active' in ufw_initial_status.stdout"
+    - not ufw_enabled
+    - ufw_current_status.stdout | trim == 'Status: active'
+
+# ============================================================
+# Report planned change in check mode
+# ============================================================
+
+- name: Report planned UFW activation change
+  ansible.builtin.debug:
+    msg: "UFW activation would change to {{ ufw_enabled }}."
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - >-
+      (ufw_enabled and ufw_current_status.stdout | trim == 'Status: inactive')
+      or
+      (not ufw_enabled and ufw_current_status.stdout | trim == 'Status: active')
+
+# ============================================================
+# Verify final UFW state
+# ============================================================
+
+- name: Read final UFW status
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/ufw
+      - status
+  environment:
+    LC_ALL: C
+  register: ufw_final_status
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Verify UFW activation state
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ufw_final_status.stdout | trim)
+        ==
+        ('Status: active' if ufw_enabled else 'Status: inactive')
+    fail_msg: "UFW activation state does not match the requested configuration."
+  when: not ansible_check_mode

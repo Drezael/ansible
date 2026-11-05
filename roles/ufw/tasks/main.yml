@@ -27,8 +27,14 @@
     packages_state: present
   when: package_definitions.firewall_packages | length > 0
   
-
-
+# ============================================================
+# Configure UFW activation state
+# ============================================================
+- name: Configure UFW activation state
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/activate.yml"
+  vars:
+    ufw_enabled: "{{ host_specifications.firewall.enabled | default(default.enabled) }}"
 
 #- name: Configure UFW firewall
 #  ansible.builtin.include_tasks:
