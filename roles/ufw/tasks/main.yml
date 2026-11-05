@@ -1,6 +1,26 @@
 ---
-- name: Configure UFW firewall
+# ============================================================
+# Load role default variable
+# ============================================================
+
+- name: Load default variables
+  ansible.builtin.include_vars:
+    file: "{{ roles_dir }}/ufw/vars/default.yml"
+    name: default
+
+# ============================================================
+# Install firewall packages
+# ============================================================
+
+- name: Install ufw Firewall packages
   ansible.builtin.include_tasks:
-    file: "{{ tasks_dir }}/ufw/configure.yml"
-  vars:
-    ufw_settings: "{{ host_specifications.firewall | default({}) }}"
+    file: "{{ tasks_dir }}/apt/install.yml"
+  
+
+
+
+#- name: Configure UFW firewall
+#  ansible.builtin.include_tasks:
+#    file: "{{ tasks_dir }}/ufw/configure.yml"
+#  vars:
+#    ufw_settings: "{{ host_specifications.firewall | default({}) }}"
