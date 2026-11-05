@@ -12,9 +12,13 @@
 # Install firewall packages
 # ============================================================
 
-- name: Install ufw Firewall packages
+- name: Install firewall packages
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/apt/install.yml"
+  vars:
+    apt_install_packages: "{{ firewall_packages }}"
+    packages_state: present
+  when: firewall_packages | length > 0
   
 
 
