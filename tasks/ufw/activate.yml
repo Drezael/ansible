@@ -26,14 +26,28 @@
   check_mode: false
 
 # ============================================================
+# Extract current UFW activation state
+# ============================================================
+
+- name: Extract current UFW activation state
+  ansible.builtin.set_fact:
+    ufw_current_state: >-
+      {{
+        ufw_current_status.stdout_lines
+        | first
+        | default('')
+        | trim
+      }}
+
+# ============================================================
 # Validate current UFW status
 # ============================================================
 
 - name: Validate current UFW status
   ansible.builtin.assert:
     that:
-      - "(ufw_current_status.stdout | trim) in ['Status: active', 'Status: inactive']"
-    fail_msg: "Unable to determine current UFW status."
+      - "ufw_current_state in ['Status: active', 'Status: inactive']"
+    fail_msg: "Unable to determine current UFW status: {{ ufw_current_state }}"
 
 # ============================================================
 # Enable UFW
@@ -49,7 +63,7 @@
   when:
     - not ansible_check_mode
     - ufw_enabled
-    - "ufw_current_status.stdout | trim == 'Status: inactive'"
+    - "ufw_current_state == 'Status: inactive'"
 
 # ============================================================
 # Disable UFW
@@ -65,7 +79,7 @@
   when:
     - not ansible_check_mode
     - not ufw_enabled
-    - "ufw_current_status.stdout | trim == 'Status: active'"
+    - "ufw_current_state == 'Status: active'"
 
 # ============================================================
 # Report planned change in check mode
@@ -78,12 +92,12 @@
   when:
     - ansible_check_mode
     - >-
-      (ufw_enabled and ufw_current_status.stdout | trim == 'Status: inactive')
+      (ufw_enabled and ufw_current_state == 'Status: inactive')
       or
-      (not ufw_enabled and ufw_current_status.stdout | trim == 'Status: active')
+      (not ufw_enabled and ufw_current_state == 'Status: active')
 
 # ============================================================
-# Verify final UFW state
+# Read final UFW state
 # ============================================================
 
 - name: Read final UFW status
@@ -98,12 +112,36 @@
   check_mode: false
   when: not ansible_check_mode
 
+# ============================================================
+# Extract final UFW activation state
+# ============================================================
+
+- name: Extract final UFW activation state
+  ansible.builtin.set_fact:
+    ufw_final_state: >-
+      {{
+        ufw_final_status.stdout_lines
+        | first
+        | default('')
+        | trim
+      }}
+  when: not ansible_check_mode
+
+# ============================================================
+# Verify final UFW activation state
+# ============================================================
+
 - name: Verify UFW activation state
   ansible.builtin.assert:
     that:
       - >-
-        (ufw_final_status.stdout | trim)
-        ==
+        ufw_final_state ==
         ('Status: active' if ufw_enabled else 'Status: inactive')
-    fail_msg: "UFW activation state does not match the requested configuration."
+    fail_msg: >-
+      UFW activation state does not match the requested configuration.
+      Requested: {{ 'active' if ufw_enabled else 'inactive' }}.
+      Actual: {{ ufw_final_state }}.
+    success_msg: >-
+      UFW activation state verified successfully:
+      {{ ufw_final_state }}.
   when: not ansible_check_mode

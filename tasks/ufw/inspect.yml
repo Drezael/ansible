@@ -1,6 +1,6 @@
 ---
 # ============================================================
-# Read persisted UFW commands, including when UFW is inactive
+# Read persisted UFW user rules, even while UFW is inactive
 # ============================================================
 
 - name: Read saved UFW rules
@@ -16,11 +16,17 @@
   check_mode: false
 
 # ============================================================
-# Distinguish owned rules from rules outside Ansible's control
+# Identify valid Ansible tags and all other user rules
 # ============================================================
 
 - name: Collect UFW rule commands
   ansible.builtin.set_fact:
+    ufw_rules_all_commands: >-
+      {{
+        ufw_rules_inspection.stdout_lines
+        | select('match', '^ufw ')
+        | list
+      }}
     ufw_rules_managed_commands: >-
       {{
         ufw_rules_inspection.stdout_lines
@@ -35,26 +41,21 @@
         | list
       }}
 
-- name: Reject unsupported Ansible-owned UFW commands
+# Abort rather than silently ignoring rules that cannot be deleted.
+- name: Validate persisted UFW command types
   ansible.builtin.assert:
     that:
-      - >-
-        (
-          ufw_rules_inspection.stdout_lines
-          | select('match', '^ufw ')
-          | select('search', 'ansible-ufw-v1-')
-          | reject('match', "^ufw (allow|deny|reject|limit) .+ comment 'ansible-ufw-v1-[0-9a-f]{24}'$")
-          | list | length
-        ) == 0
-    fail_msg: >-
-      An Ansible-owned rule has an unsupported comment format.
-      No firewall rules will be removed.
+      - "item is match('^ufw (route )?(allow|deny|reject|limit) .+$')"
+    fail_msg: "Unsupported UFW user rule syntax: {{ item }}"
+  loop: "{{ ufw_rules_all_commands }}"
+  loop_control:
+    label: "{{ item }}"
 
 # ============================================================
-# Decode every owned rule: compare contents, not only comments
+# Normalize valid Ansible-managed rules and their true content
 # ============================================================
 
-- name: Initialize inspected UFW rules
+- name: Initialize inspected managed UFW rules
   ansible.builtin.set_fact:
     ufw_rules_managed: []
 
@@ -97,10 +98,6 @@
   loop: "{{ ufw_rules_managed_commands }}"
   loop_control:
     label: "{{ item }}"
-
-# ============================================================
-# Fail closed on any command outside our supported rule subset
-# ============================================================
 
 - name: Validate parsed Ansible-managed UFW commands
   ansible.builtin.assert:

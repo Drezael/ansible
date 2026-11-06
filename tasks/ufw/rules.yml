@@ -1,6 +1,6 @@
 ---
 # ============================================================
-# Validate inputs passed explicitly by the calling role
+# Validate inputs passed by the calling role
 # ============================================================
 
 - name: Validate UFW rule management parameters
@@ -42,7 +42,7 @@
     label: "{{ item.port | default('?') }}"
 
 # ============================================================
-# Build canonical desired rules with content-derived ownership tags
+# Build desired rules and their content-derived managed tags
 # ============================================================
 
 - name: Initialize desired managed UFW rules
@@ -94,12 +94,12 @@
           | list | length
         ) > 0
     fail_msg: >-
-      No explicit allow rule was defined for the Ansible SSH port.
-      No SSH rule is added automatically.
+      No explicit allow rule exists for the current Ansible SSH port.
+      No SSH rule is ever added automatically.
   when: ufw_require_ssh_rule
 
 # ============================================================
-# Inspect saved rules (even when UFW is inactive)
+# Inspect all saved UFW user rules
 # ============================================================
 
 - name: Check for installed UFW binary
@@ -126,16 +126,16 @@
     - ansible_check_mode
     - not ufw_rules_binary.stat.exists
 
-- name: Preserve the initial rule inventory
+- name: Preserve initial rule inventory
   ansible.builtin.set_fact:
     ufw_rules_before_managed: "{{ ufw_rules_managed }}"
+    ufw_rules_before_unmanaged: "{{ ufw_rules_unmanaged_commands }}"
     ufw_rules_desired_markers: "{{ ufw_rules_desired | map(attribute='marker') | list }}"
     ufw_rules_present_valid_markers: []
     ufw_rules_stale: []
 
-# A matching comment is NOT sufficient: recompute the fingerprint
-# from action, direction, protocol, port, source, and destination.
-- name: Compare existing UFW rule contents with their comments
+# The tag must match the actual fields. A tag alone is not proof.
+- name: Compare actual managed rule contents with their tags
   ansible.builtin.set_fact:
     ufw_rules_present_valid_markers: >-
       {{
@@ -153,20 +153,6 @@
   loop_control:
     label: "{{ item.command }}"
 
-# UFW can update a comment on an otherwise identical existing rule.
-# Never risk deleting the replacement by deleting an ambiguous old command.
-- name: Reject ambiguous ownership comments on identical rules
-  ansible.builtin.assert:
-    that:
-      - item.actual_marker not in ufw_rules_desired_markers
-    fail_msg: >-
-      An existing rule has the desired network properties but the wrong
-      Ansible ownership comment: {{ item.command }}.
-      Resolve this conflict explicitly before reconciling rules.
-  loop: "{{ ufw_rules_stale }}"
-  loop_control:
-    label: "{{ item.command }}"
-
 - name: Determine missing desired UFW rules
   ansible.builtin.set_fact:
     ufw_rules_missing: >-
@@ -177,24 +163,8 @@
       }}
 
 # ============================================================
-# Protect unmanaged rules and the live SSH connection
+# Inspect activation state before changes
 # ============================================================
-
-- name: Reject possible collisions with unmanaged UFW rules
-  ansible.builtin.assert:
-    that:
-      - >-
-        (
-          ufw_rules_unmanaged_commands
-          | select('search', '(^|[ /])' ~ item.port ~ '(/' ~ item.protocol ~ ')?(?= |$)|port ' ~ item.port ~ '(?= |$)')
-          | list | length
-        ) == 0
-    fail_msg: >-
-      An unmanaged rule already references port {{ item.port }}.
-      Refusing to change its ownership or overwrite its comment.
-  loop: "{{ ufw_rules_missing }}"
-  loop_control:
-    label: "{{ item.port }}/{{ item.protocol }}"
 
 - name: Read current UFW activation status
   ansible.builtin.command:
@@ -208,53 +178,25 @@
   check_mode: false
   when: ufw_rules_binary.stat.exists
 
-- name: Protect currently active SSH connection
-  ansible.builtin.assert:
-    that:
-      - >-
-        (ufw_rules_status.stdout | default('Status: inactive') | trim != 'Status: active')
-        or
-        (
-          ufw_rules_desired
-          | selectattr('action', 'equalto', 'allow')
-          | selectattr('direction', 'equalto', 'in')
-          | selectattr('protocol', 'equalto', 'tcp')
-          | selectattr('port', 'equalto', ufw_connection_port | string)
-          | list | length
-        ) > 0
-    fail_msg: >-
-      UFW is currently active but no explicit SSH allow rule for
-      the current Ansible port was defined.
-
-- name: Identify stale SSH rules
+- name: Extract current UFW activation state
   ansible.builtin.set_fact:
-    ufw_rules_stale_ssh: >-
+    ufw_rules_current_state: >-
       {{
-        ufw_rules_stale
-        | selectattr('action', 'equalto', 'allow')
-        | selectattr('direction', 'equalto', 'in')
-        | selectattr('protocol', 'equalto', 'tcp')
-        | selectattr('port', 'equalto', ufw_connection_port | string)
-        | list
+        (ufw_rules_status.stdout_lines | default([]) | first | default('Status: inactive'))
+        | trim
       }}
 
-- name: Prevent deletion of active SSH rules without explicit consent
+- name: Validate UFW activation state for rule reconciliation
   ansible.builtin.assert:
     that:
-      - >-
-        (ufw_rules_status.stdout | default('Status: inactive') | trim != 'Status: active')
-        or ufw_allow_ssh_rule_removal
-        or (ufw_rules_stale_ssh | length == 0)
-    fail_msg: >-
-      An existing SSH rule would be removed while UFW is active.
-      Set firewall.allow_ssh_rule_removal=true only after verifying
-      the replacement rule and the controller's permitted source address.
+      - "ufw_rules_current_state in ['Status: active', 'Status: inactive']"
+    fail_msg: "Unable to determine UFW state: {{ ufw_rules_current_state }}"
 
 # ============================================================
-# Add missing rules before deleting stale rules
+# Add or adopt desired rules before removing obsolete rules
 # ============================================================
 
-- name: Add missing Ansible-managed UFW rules
+- name: Add or adopt missing managed UFW rules
   ansible.builtin.command:
     argv:
       - /usr/sbin/ufw
@@ -278,16 +220,12 @@
     label: "{{ item.action }} {{ item.direction }} {{ item.port }}/{{ item.protocol }}"
   when: not ansible_check_mode
 
-# ============================================================
-# Check the ACTUAL contents again before permitting deletions
-# ============================================================
-
-- name: Inspect saved UFW commands after additions
+- name: Inspect UFW rules after additions
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/ufw/inspect.yml"
   when: not ansible_check_mode
 
-- name: Verify exact desired UFW rule contents before deletions
+- name: Verify all desired managed UFW rules before deletion
   ansible.builtin.assert:
     that:
       - >-
@@ -296,16 +234,18 @@
           | selectattr('marker', 'equalto', item.marker)
           | selectattr('actual_marker', 'equalto', item.marker)
           | list | length
-        ) >= 1
+        ) == 1
     fail_msg: >-
-      The expected rule {{ item.marker }} is missing or its
-      actual fields do not match. No old rules will be deleted.
+      Expected rule {{ item.marker }} is not uniquely present with
+      matching content. No old rules will be deleted.
   loop: "{{ ufw_rules_desired }}"
   loop_control:
     label: "{{ item.port }}/{{ item.protocol }}"
   when: not ansible_check_mode
 
-- name: Record still-existing obsolete UFW commands
+# Deleting a rule by its specification might delete another rule with
+# the same fields. Stop if an outdated tagged duplicate is still present.
+- name: Find remaining obsolete Ansible-managed UFW rules
   ansible.builtin.set_fact:
     ufw_rules_stale_remaining: >-
       {{
@@ -314,6 +254,67 @@
         | list
       }}
   when: not ansible_check_mode
+
+- name: Reject ambiguous duplicate UFW rules
+  ansible.builtin.assert:
+    that:
+      - item.actual_marker not in ufw_rules_desired_markers
+    fail_msg: >-
+      Obsolete rule {{ item.command }} has the same network properties
+      as a desired rule but a different tag. Deletion would be ambiguous.
+  loop: "{{ ufw_rules_stale_remaining | default([]) }}"
+  loop_control:
+    label: "{{ item.command }}"
+  when: not ansible_check_mode
+
+# ============================================================
+# Protect SSH if a deletion could change the controller's access
+# ============================================================
+
+- name: Identify obsolete managed SSH rules
+  ansible.builtin.set_fact:
+    ufw_rules_stale_ssh: >-
+      {{
+        (ufw_rules_stale_remaining if not ansible_check_mode else ufw_rules_stale)
+        | selectattr('action', 'equalto', 'allow')
+        | selectattr('direction', 'equalto', 'in')
+        | selectattr('protocol', 'equalto', 'tcp')
+        | selectattr('port', 'equalto', ufw_connection_port | string)
+        | list
+      }}
+
+- name: Determine whether desired SSH access is unrestricted
+  ansible.builtin.set_fact:
+    ufw_rules_unrestricted_ssh: >-
+      {{
+        (
+          ufw_rules_desired
+          | selectattr('action', 'equalto', 'allow')
+          | selectattr('direction', 'equalto', 'in')
+          | selectattr('protocol', 'equalto', 'tcp')
+          | selectattr('port', 'equalto', ufw_connection_port | string)
+          | selectattr('from_ip', 'equalto', 'any')
+          | selectattr('to_ip', 'equalto', 'any')
+          | list | length
+        ) > 0
+      }}
+
+- name: Guard against unsafe removal of active SSH rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        ufw_rules_current_state != 'Status: active'
+        or ufw_allow_ssh_rule_removal
+        or (ufw_rules_stale_ssh | length == 0)
+        or ufw_rules_unrestricted_ssh
+    fail_msg: >-
+      An obsolete managed SSH rule would be deleted while UFW is active.
+      Provide an unrestricted replacement or explicitly allow this
+      operation using firewall.allow_ssh_rule_removal=true.
+
+# ============================================================
+# Delete obsolete managed rules before unmanaged-rule cleanup
+# ============================================================
 
 - name: Delete obsolete Ansible-managed UFW rules
   ansible.builtin.command:
@@ -326,40 +327,12 @@
     label: "{{ item.command }}"
   when: not ansible_check_mode
 
-# ============================================================
-# Report the actual diff in check mode
-# ============================================================
-
-- name: Preview missing UFW rules
-  ansible.builtin.debug:
-    msg: >-
-      Would add {{ item.action }} {{ item.direction }} {{ item.port }}/{{ item.protocol }}
-      from {{ item.from_ip }} to {{ item.to_ip }}.
-  changed_when: true
-  loop: "{{ ufw_rules_missing }}"
-  loop_control:
-    label: "{{ item.port }}/{{ item.protocol }}"
-  when: ansible_check_mode
-
-- name: Preview obsolete UFW rules
-  ansible.builtin.debug:
-    msg: "Would remove {{ item.command }}"
-  changed_when: true
-  loop: "{{ ufw_rules_stale }}"
-  loop_control:
-    label: "{{ item.command }}"
-  when: ansible_check_mode
-
-# ============================================================
-# Verify the complete managed rule set after all changes
-# ============================================================
-
-- name: Inspect final saved UFW commands
+- name: Inspect UFW rules before unmanaged cleanup
   ansible.builtin.include_tasks:
     file: "{{ tasks_dir }}/ufw/inspect.yml"
   when: not ansible_check_mode
 
-- name: Verify every desired rule matches its actual stored fields
+- name: Verify desired rules are still present
   ansible.builtin.assert:
     that:
       - >-
@@ -369,15 +342,117 @@
           | selectattr('actual_marker', 'equalto', item.marker)
           | list | length
         ) == 1
-    fail_msg: "Desired UFW rule is missing or duplicated: {{ item.marker }}"
+    fail_msg: >-
+      A desired UFW rule disappeared while cleaning managed rules.
+      Refusing to delete unmanaged rules.
   loop: "{{ ufw_rules_desired }}"
   loop_control:
     label: "{{ item.port }}/{{ item.protocol }}"
   when: not ansible_check_mode
 
-- name: Verify the managed UFW inventory is complete
+# A valid managed tag is the only exemption from cleanup.
+# Other UFW user rules are removed, including rules with malformed tags.
+- name: Identify unmanaged SSH rules
+  ansible.builtin.set_fact:
+    ufw_rules_unmanaged_ssh: >-
+      {{
+        (ufw_rules_before_unmanaged if ansible_check_mode else ufw_rules_unmanaged_commands)
+        | select('match', '^ufw (allow|limit) ')
+        | select('search', '(?i)(?:^|[ /])' ~ (ufw_connection_port | string) ~ '(?:/tcp)?(?= |$)|(?:^| )(?:ssh|openssh)(?= |$)')
+        | list
+      }}
+
+- name: Guard against unsafe removal of unmanaged SSH rules
   ansible.builtin.assert:
     that:
+      - >-
+        ufw_rules_current_state != 'Status: active'
+        or ufw_allow_ssh_rule_removal
+        or (ufw_rules_unmanaged_ssh | length == 0)
+        or ufw_rules_unrestricted_ssh
+    fail_msg: >-
+      An unmanaged SSH rule would be deleted while UFW is active.
+      Provide an unrestricted managed SSH replacement or set
+      firewall.allow_ssh_rule_removal=true after verifying access.
+
+# This command module uses shell-like argument parsing but does NOT run a shell.
+# It preserves quoted application profiles and comments from 'ufw show added'.
+- name: Delete all UFW rules without a valid managed tag
+  ansible.builtin.command:
+    cmd: >-
+      /usr/sbin/ufw --force
+      {{ 'route delete' if item is match('^ufw route ') else 'delete' }}
+      {{ item | regex_replace('^ufw (route )?', '') }}
+  environment:
+    LC_ALL: C
+  changed_when: true
+  loop: "{{ ufw_rules_unmanaged_commands }}"
+  loop_control:
+    label: "{{ item }}"
+  when: not ansible_check_mode
+
+# ============================================================
+# Check mode: report both obsolete tagged and untagged rules
+# ============================================================
+
+- name: Preview missing managed UFW rules
+  ansible.builtin.debug:
+    msg: >-
+      Would add or adopt {{ item.action }} {{ item.direction }}
+      {{ item.port }}/{{ item.protocol }} from {{ item.from_ip }} to {{ item.to_ip }}.
+  changed_when: true
+  loop: "{{ ufw_rules_missing }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.protocol }}"
+  when: ansible_check_mode
+
+- name: Preview obsolete managed UFW rules
+  ansible.builtin.debug:
+    msg: "Would remove obsolete managed rule: {{ item.command }}"
+  changed_when: true
+  loop: "{{ ufw_rules_stale }}"
+  loop_control:
+    label: "{{ item.command }}"
+  when: ansible_check_mode
+
+- name: Preview unmanaged UFW rules to remove or adopt
+  ansible.builtin.debug:
+    msg: "Would delete or adopt unmanaged rule: {{ item }}"
+  changed_when: true
+  loop: "{{ ufw_rules_before_unmanaged }}"
+  loop_control:
+    label: "{{ item }}"
+  when: ansible_check_mode
+
+# ============================================================
+# Verify complete and exclusive control of UFW user rules
+# ============================================================
+
+- name: Inspect final saved UFW commands
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/inspect.yml"
+  when: not ansible_check_mode
+
+- name: Verify all desired rules have exact managed content
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          ufw_rules_managed
+          | selectattr('marker', 'equalto', item.marker)
+          | selectattr('actual_marker', 'equalto', item.marker)
+          | list | length
+        ) == 1
+    fail_msg: "Desired rule is missing or duplicated: {{ item.marker }}"
+  loop: "{{ ufw_rules_desired }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.protocol }}"
+  when: not ansible_check_mode
+
+- name: Verify no unmanaged or obsolete UFW user rules remain
+  ansible.builtin.assert:
+    that:
+      - (ufw_rules_unmanaged_commands | length) == 0
       - (ufw_rules_managed | length) == (ufw_rules_desired | length)
       - >-
         (
@@ -385,14 +460,16 @@
           | rejectattr('marker', 'in', ufw_rules_desired_markers)
           | list | length
         ) == 0
-    fail_msg: "Unexpected or obsolete Ansible-managed UFW rules remain."
+    fail_msg: >-
+      UFW still contains unmanaged rules or obsolete Ansible rules.
+      Firewall reconciliation is incomplete.
   when: not ansible_check_mode
 
-- name: Verify no saved rule has an incorrect ownership fingerprint
+- name: Verify no rule differs from its managed fingerprint
   ansible.builtin.assert:
     that:
       - item.marker == item.actual_marker
-    fail_msg: "Saved rule content differs from its ownership marker: {{ item.command }}"
+    fail_msg: "UFW rule content differs from its tag: {{ item.command }}"
   loop: "{{ ufw_rules_managed }}"
   loop_control:
     label: "{{ item.command }}"
