@@ -1,0 +1,125 @@
+---
+# ============================================================
+# Read persisted UFW commands, including when UFW is inactive
+# ============================================================
+
+- name: Read saved UFW rules
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/ufw
+      - show
+      - added
+  environment:
+    LC_ALL: C
+  register: ufw_rules_inspection
+  changed_when: false
+  check_mode: false
+
+# ============================================================
+# Distinguish owned rules from rules outside Ansible's control
+# ============================================================
+
+- name: Collect UFW rule commands
+  ansible.builtin.set_fact:
+    ufw_rules_managed_commands: >-
+      {{
+        ufw_rules_inspection.stdout_lines
+        | select('match', "^ufw (allow|deny|reject|limit) .+ comment 'ansible-ufw-v1-[0-9a-f]{24}'$")
+        | list
+      }}
+    ufw_rules_unmanaged_commands: >-
+      {{
+        ufw_rules_inspection.stdout_lines
+        | select('match', '^ufw ')
+        | reject('match', "^ufw (allow|deny|reject|limit) .+ comment 'ansible-ufw-v1-[0-9a-f]{24}'$")
+        | list
+      }}
+
+- name: Reject unsupported Ansible-owned UFW commands
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          ufw_rules_inspection.stdout_lines
+          | select('match', '^ufw ')
+          | select('search', 'ansible-ufw-v1-')
+          | reject('match', "^ufw (allow|deny|reject|limit) .+ comment 'ansible-ufw-v1-[0-9a-f]{24}'$")
+          | list | length
+        ) == 0
+    fail_msg: >-
+      An Ansible-owned rule has an unsupported comment format.
+      No firewall rules will be removed.
+
+# ============================================================
+# Decode every owned rule: compare contents, not only comments
+# ============================================================
+
+- name: Initialize inspected UFW rules
+  ansible.builtin.set_fact:
+    ufw_rules_managed: []
+
+- name: Normalize saved Ansible-managed UFW commands
+  ansible.builtin.set_fact:
+    ufw_rules_managed: >-
+      {%- set marker = item | regex_findall(" comment '(ansible-ufw-v1-[0-9a-f]{24})'$") | first | default('') -%}
+      {%- set base = item | regex_replace(" comment 'ansible-ufw-v1-[0-9a-f]{24}'$", '') -%}
+      {%- set action = base | regex_findall('^ufw (allow|deny|reject|limit)(?= |$)') | first | default('') -%}
+      {%- set direction = base | regex_findall('^ufw (?:allow|deny|reject|limit) (in|out)(?= |$)') | first | default('in') -%}
+      {%- set protocol = base | regex_findall('(?:^| )proto (tcp|udp)(?= |$)') | first | default(base | regex_findall('(?:^| )[0-9]{1,5}/(tcp|udp)(?= |$)') | first | default('')) -%}
+      {%- set port = base | regex_findall('(?:^| )port ([0-9]{1,5})(?= |$)') | first | default(base | regex_findall('(?:^| )([0-9]{1,5})/(?:tcp|udp)(?= |$)') | first | default('')) -%}
+      {%- set from_ip = base | regex_findall('(?:^| )from ([^ ]+)(?= |$)') | first | default('any') -%}
+      {%- set to_ip = base | regex_findall('(?:^| )to ([^ ]+)(?= |$)') | first | default('any') -%}
+      {%- set remainder = base
+          | regex_replace('^ufw (?:allow|deny|reject|limit)(?: (?:in|out))?', '')
+          | regex_replace('(?:^| )(?:proto (?:tcp|udp)|from [^ ]+|to [^ ]+|port [0-9]{1,5}|[0-9]{1,5}/(?:tcp|udp))(?= |$)', ' ')
+          | trim -%}
+      {%- set actual_marker = 'ansible-ufw-v1-' ~ (([action, direction, protocol, port | int | string, from_ip, to_ip] | join('|') | hash('sha256'))[:24]) -%}
+      {{
+        ufw_rules_managed + [{
+          'command': item,
+          'port_count': ((base | regex_findall('(?:^| )port [0-9]{1,5}(?= |$)')) | length) + ((base | regex_findall('(?:^| )[0-9]{1,5}/(?:tcp|udp)(?= |$)')) | length),
+          'proto_count': ((base | regex_findall('(?:^| )proto (?:tcp|udp)(?= |$)')) | length) + ((base | regex_findall('(?:^| )[0-9]{1,5}/(?:tcp|udp)(?= |$)')) | length),
+          'from_count': (base | regex_findall('(?:^| )from [^ ]+(?= |$)') | length),
+          'to_count': (base | regex_findall('(?:^| )to [^ ]+(?= |$)') | length),
+          'marker': marker,
+          'actual_marker': actual_marker,
+          'action': action,
+          'direction': direction,
+          'protocol': protocol,
+          'port': port,
+          'from_ip': from_ip,
+          'to_ip': to_ip,
+          'remainder': remainder,
+          'delete_argv': ['/usr/sbin/ufw', '--force', 'delete']
+            + (base | regex_replace('^ufw ', '')).split()
+        }]
+      }}
+  loop: "{{ ufw_rules_managed_commands }}"
+  loop_control:
+    label: "{{ item }}"
+
+# ============================================================
+# Fail closed on any command outside our supported rule subset
+# ============================================================
+
+- name: Validate parsed Ansible-managed UFW commands
+  ansible.builtin.assert:
+    that:
+      - item.marker is match('^ansible-ufw-v1-[0-9a-f]{24}$')
+      - item.action in ['allow', 'deny', 'reject', 'limit']
+      - item.direction in ['in', 'out']
+      - item.protocol in ['tcp', 'udp']
+      - item.port | string is match('^[0-9]{1,5}$')
+      - item.port | int >= 1
+      - item.port | int <= 65535
+      - item.port_count == 1
+      - item.proto_count == 1
+      - item.from_count <= 1
+      - item.to_count <= 1
+      - item.remainder == ''
+    fail_msg: >-
+      Unsupported Ansible-managed UFW command: {{ item.command }}.
+      Aborting without deleting firewall rules.
+  loop: "{{ ufw_rules_managed }}"
+  loop_control:
+    label: "{{ item.command }}"
