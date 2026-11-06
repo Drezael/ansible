@@ -17,3 +17,4 @@ firewall:
       port: 22
 host_roles:
   - server
+  - ufw
