@@ -1,0 +1,405 @@
+---
+# ============================================================
+# Validate the selected self-test and its independent inputs
+# ============================================================
+
+- name: Validate UFW self-test parameters
+  ansible.builtin.assert:
+    that:
+      - ufw_test_selection in ['unmanaged', 'activation', 'check']
+      - ufw_test_port | string is match('^[0-9]+$')
+      - ufw_test_port | int >= 1024
+      - ufw_test_port | int <= 65535
+      - ufw_test_port | int != ufw_test_connection_port | int
+      - ufw_test_desired_rules is sequence
+      - ufw_test_desired_rules is not string
+      - ufw_test_canonical_rules is sequence
+      - ufw_test_require_ssh_rule is boolean
+      - ufw_test_allow_ssh_rule_removal is boolean
+      - ufw_test_expected_login is string
+      - ufw_test_tasks_dir is string
+    fail_msg: "Invalid UFW self-test selection or parameters."
+
+- name: Validate UFW self-test execution mode
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ufw_test_selection == 'check' and ansible_check_mode)
+        or
+        (ufw_test_selection in ['unmanaged', 'activation'] and not ansible_check_mode)
+      - >-
+        (ufw_test_selection == 'check')
+        or
+        (ufw_test_confirmation == 'RUN_UFW_TESTS')
+    fail_msg: >-
+      Use --check for ufw_test_mode=check. Writing tests require a
+      normal Ansible run and -e ufw_test_confirm=RUN_UFW_TESTS.
+
+- name: Validate temporary UFW test port is absent from host rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ufw_test_port | string)
+        not in (ufw_test_canonical_rules | map(attribute='port') | list)
+    fail_msg: >-
+      The temporary test port is already defined in host specifications.
+      Choose an unused port with -e ufw_test_target_port=<port>.
+  when: ufw_test_selection in ['unmanaged', 'check']
+
+- name: Read UFW rules before self-test
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/ufw
+      - show
+      - added
+  environment:
+    LC_ALL: C
+  register: ufw_test_before_rules
+  changed_when: false
+  check_mode: false
+
+- name: Ensure temporary port has no pre-existing UFW rule
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          ufw_test_before_rules.stdout_lines
+          | select('search', '(?:^|[ /])' ~ (ufw_test_port | string) ~ '(?:/(?:tcp|udp))?(?= |$)|port ' ~ (ufw_test_port | string) ~ '(?= |$)')
+          | list | length
+        ) == 0
+    fail_msg: >-
+      A saved UFW rule already references the temporary test port.
+      Choose an unused port before running the test.
+  when: ufw_test_selection in ['unmanaged', 'check']
+
+# ============================================================
+# Test 1: inject an unmanaged rule and verify role reconciliation
+# ============================================================
+
+- name: Test cleanup of an unmanaged UFW rule
+  when: ufw_test_selection == 'unmanaged'
+  block:
+
+    - name: Add temporary unmanaged UFW rule
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - deny
+          - in
+          - proto
+          - tcp
+          - from
+          - any
+          - to
+          - any
+          - port
+          - "{{ ufw_test_port | string }}"
+          - comment
+          - ansible-ufw-selftest-unmanaged
+      environment:
+        LC_ALL: C
+      changed_when: true
+
+    - name: Verify unmanaged test rule was created
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - show
+          - added
+      environment:
+        LC_ALL: C
+      register: ufw_test_injected_rules
+      changed_when: false
+      check_mode: false
+
+    - name: Assert unmanaged test rule exists
+      ansible.builtin.assert:
+        that:
+          - "'ansible-ufw-selftest-unmanaged' in ufw_test_injected_rules.stdout"
+        fail_msg: "Unable to create the temporary unmanaged test rule."
+
+    - name: Reconcile firewall rules through the existing task file
+      ansible.builtin.include_tasks:
+        file: "{{ ufw_test_tasks_dir }}/ufw/rules.yml"
+      vars:
+        ufw_rules: "{{ ufw_test_desired_rules }}"
+        ufw_connection_port: "{{ ufw_test_connection_port }}"
+        ufw_require_ssh_rule: "{{ ufw_test_require_ssh_rule }}"
+        ufw_allow_ssh_rule_removal: "{{ ufw_test_allow_ssh_rule_removal }}"
+
+    - name: Read UFW rules after unmanaged cleanup
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - show
+          - added
+      environment:
+        LC_ALL: C
+      register: ufw_test_after_unmanaged
+      changed_when: false
+      check_mode: false
+
+    - name: Verify unmanaged cleanup restored the original rules
+      ansible.builtin.assert:
+        that:
+          - ufw_test_after_unmanaged.stdout == ufw_test_before_rules.stdout
+          - "'ansible-ufw-selftest-unmanaged' not in ufw_test_after_unmanaged.stdout"
+        fail_msg: >-
+          Cleanup failed: UFW rules differ from the snapshot taken before
+          the unmanaged rule was injected.
+
+  rescue:
+
+    - name: Inspect temporary rule after unmanaged-test failure
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - show
+          - added
+      environment:
+        LC_ALL: C
+      register: ufw_test_cleanup_snapshot
+      changed_when: false
+      check_mode: false
+
+    - name: Remove temporary rule if self-test cleanup failed
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - --force
+          - delete
+          - deny
+          - in
+          - proto
+          - tcp
+          - from
+          - any
+          - to
+          - any
+          - port
+          - "{{ ufw_test_port | string }}"
+      environment:
+        LC_ALL: C
+      changed_when: true
+      when: "'ansible-ufw-selftest-unmanaged' in ufw_test_cleanup_snapshot.stdout"
+
+    - name: Mark unmanaged cleanup test as failed
+      ansible.builtin.fail:
+        msg: >-
+          The unmanaged UFW rule cleanup test failed. A cleanup attempt
+          was performed; inspect the target firewall before proceeding.
+
+# ============================================================
+# Test 2: deactivate and reactivate UFW, then restore original state
+# ============================================================
+
+- name: Test UFW activation and deactivation
+  when: ufw_test_selection == 'activation'
+  block:
+
+    - name: Verify a broad managed SSH rule exists before activation test
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              ufw_test_canonical_rules
+              | selectattr('action', 'equalto', 'allow')
+              | selectattr('direction', 'equalto', 'in')
+              | selectattr('protocol', 'equalto', 'tcp')
+              | selectattr('port', 'equalto', ufw_test_connection_port | string)
+              | selectattr('from_ip', 'equalto', 'any')
+              | selectattr('to_ip', 'equalto', 'any')
+              | list | length
+            ) > 0
+        fail_msg: >-
+          Activation self-test requires an existing managed SSH allow rule
+          from any to any on the current Ansible port.
+
+    - name: Read original UFW activation status
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - status
+      environment:
+        LC_ALL: C
+      register: ufw_test_original_status
+      changed_when: false
+      check_mode: false
+
+    - name: Remember original activation state
+      ansible.builtin.set_fact:
+        ufw_test_original_state: "{{ ufw_test_original_status.stdout_lines | first | default('') | trim }}"
+
+    - name: Validate original UFW activation state
+      ansible.builtin.assert:
+        that:
+          - "ufw_test_original_state in ['Status: active', 'Status: inactive']"
+        fail_msg: "Cannot reliably determine the original UFW state."
+
+    - name: Exercise UFW activation transitions
+      block:
+
+        - name: Deactivate UFW during self-test
+          ansible.builtin.include_tasks:
+            file: "{{ ufw_test_tasks_dir }}/ufw/activate.yml"
+          vars:
+            ufw_enabled: false
+
+        - name: Verify UFW is inactive during self-test
+          ansible.builtin.assert:
+            that:
+              - "ufw_final_state == 'Status: inactive'"
+
+        - name: Activate UFW during self-test
+          ansible.builtin.include_tasks:
+            file: "{{ ufw_test_tasks_dir }}/ufw/activate.yml"
+          vars:
+            ufw_enabled: true
+
+        - name: Verify UFW is active during self-test
+          ansible.builtin.assert:
+            that:
+              - "ufw_final_state == 'Status: active'"
+
+        - name: Reopen SSH connection after activating UFW
+          ansible.builtin.meta: reset_connection
+
+        - name: Verify fresh SSH login after activation
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/id
+              - -un
+          become: false
+          check_mode: false
+          register: ufw_test_ssh_login
+          changed_when: false
+          failed_when: >-
+            ufw_test_ssh_login.rc != 0
+            or ufw_test_ssh_login.stdout | trim != ufw_test_expected_login
+
+      rescue:
+
+        - name: Mark UFW activation self-test as failed
+          ansible.builtin.fail:
+            msg: "UFW activation/deactivation self-test failed."
+
+      always:
+
+        - name: Restore original UFW activation state
+          ansible.builtin.include_tasks:
+            file: "{{ ufw_test_tasks_dir }}/ufw/activate.yml"
+          vars:
+            ufw_enabled: "{{ ufw_test_original_state == 'Status: active' }}"
+
+        - name: Verify original UFW activation state was restored
+          ansible.builtin.assert:
+            that:
+              - "ufw_final_state == ufw_test_original_state"
+            fail_msg: "UFW activation state was not restored after self-test."
+
+        - name: Reopen SSH connection after restoration
+          ansible.builtin.meta: reset_connection
+
+        - name: Verify fresh SSH login after restoration
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/id
+              - -un
+          become: false
+          check_mode: false
+          register: ufw_test_restored_ssh
+          changed_when: false
+          failed_when: >-
+            ufw_test_restored_ssh.rc != 0
+            or ufw_test_restored_ssh.stdout | trim != ufw_test_expected_login
+
+# ============================================================
+# Test 3: simulate a rule in Ansible check mode, verify no writes
+# ============================================================
+
+- name: Test UFW check-mode rule preview and immutability
+  when: ufw_test_selection == 'check'
+  block:
+
+    - name: Read original UFW activation status for check test
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - status
+      environment:
+        LC_ALL: C
+      register: ufw_test_check_before_status
+      changed_when: false
+      check_mode: false
+
+    - name: Read original UFW default policies for check test
+      ansible.builtin.slurp:
+        src: /etc/default/ufw
+      register: ufw_test_check_before_defaults
+
+    - name: Preview one additional temporary rule through rules.yml
+      ansible.builtin.include_tasks:
+        file: "{{ ufw_test_tasks_dir }}/ufw/rules.yml"
+      vars:
+        ufw_rules: >-
+          {{
+            ufw_test_desired_rules + [{
+              'action': 'deny',
+              'direction': 'in',
+              'protocol': 'tcp',
+              'port': ufw_test_port | int
+            }]
+          }}
+        ufw_connection_port: "{{ ufw_test_connection_port }}"
+        ufw_require_ssh_rule: "{{ ufw_test_require_ssh_rule }}"
+        ufw_allow_ssh_rule_removal: "{{ ufw_test_allow_ssh_rule_removal }}"
+
+    - name: Verify preview predicts the synthetic rule as missing
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              ufw_rules_missing
+              | selectattr('port', 'equalto', ufw_test_port | string)
+              | selectattr('action', 'equalto', 'deny')
+              | list | length
+            ) == 1
+        fail_msg: "Check mode did not predict the additional test rule."
+
+    - name: Read UFW user rules after check preview
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - show
+          - added
+      environment:
+        LC_ALL: C
+      register: ufw_test_check_after_rules
+      changed_when: false
+      check_mode: false
+
+    - name: Read UFW activation status after check preview
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - status
+      environment:
+        LC_ALL: C
+      register: ufw_test_check_after_status
+      changed_when: false
+      check_mode: false
+
+    - name: Read UFW policies after check preview
+      ansible.builtin.slurp:
+        src: /etc/default/ufw
+      register: ufw_test_check_after_defaults
+
+    - name: Verify UFW state did not change during check mode
+      ansible.builtin.assert:
+        that:
+          - ufw_test_check_after_rules.stdout == ufw_test_before_rules.stdout
+          - ufw_test_check_after_status.stdout == ufw_test_check_before_status.stdout
+          - ufw_test_check_after_defaults.content == ufw_test_check_before_defaults.content
+        fail_msg: >-
+          The UFW saved rules, activation state or default policies changed
+          during check mode.

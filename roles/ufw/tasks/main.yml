@@ -43,7 +43,7 @@
     - not ((host_specifications.firewall | default({})).enabled | default(default.enabled))
 
 # ============================================================
-# Reconcile only Ansible-managed UFW rules
+# Reconcile all UFW user rules against host specifications
 # ============================================================
 
 - name: Configure UFW firewall rules
@@ -73,7 +73,7 @@
     ufw_outgoing_policy: "{{ (host_specifications.firewall | default({})).outgoing_policy | default(default.outgoing_policy) }}"
 
 # ============================================================
-# Activate or deactivate UFW as the last step
+# Activate or deactivate UFW as the last configuration step
 # ============================================================
 
 - name: Configure UFW activation state
@@ -81,3 +81,29 @@
     file: "{{ tasks_dir }}/ufw/activate.yml"
   vars:
     ufw_enabled: "{{ (host_specifications.firewall | default({})).enabled | default(default.enabled) }}"
+
+# ============================================================
+# Run optional UFW self-tests through this role (no test playbook)
+# ============================================================
+
+- name: Run selected UFW self-test
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/ufw/tests.yml"
+  vars:
+    ufw_test_selection: "{{ ufw_test_mode | default('none') }}"
+    ufw_test_confirmation: "{{ ufw_test_confirm | default('') }}"
+    ufw_test_port: "{{ ufw_test_target_port | default(65534) }}"
+    ufw_test_tasks_dir: "{{ tasks_dir }}"
+    ufw_test_desired_rules: "{{ (host_specifications.firewall | default({})).rules | default([]) }}"
+    ufw_test_canonical_rules: "{{ ufw_rules_desired }}"
+    ufw_test_connection_port: "{{ ansible_port | default(22) }}"
+    ufw_test_allow_ssh_rule_removal: "{{ (host_specifications.firewall | default({})).allow_ssh_rule_removal | default(false) }}"
+    ufw_test_require_ssh_rule: >-
+      {{
+        ((host_specifications.firewall | default({})).enabled | default(default.enabled))
+        and
+        ((host_specifications.firewall | default({})).incoming_policy | default(default.incoming_policy))
+        in ['deny', 'reject']
+      }}
+    ufw_test_expected_login: "{{ ansible_user | default('ansible') }}"
+  when: (ufw_test_mode | default('none')) != 'none'
