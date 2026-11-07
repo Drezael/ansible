@@ -16,5 +16,22 @@ server_packages:
   - locales
   - logrotate
 
+# ============================================================
+# UFW packages
+# ============================================================
+
 firewall_packages:
   - ufw
+
+# ============================================================
+# Official Docker Engine, CLI, containerd, Buildx and Compose
+# ============================================================
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+  - ca-certificates
+  - curl
