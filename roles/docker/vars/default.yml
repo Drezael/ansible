@@ -1,0 +1,3 @@
+---
+# Desired Docker daemon service state once service management is added.
+enabled: true

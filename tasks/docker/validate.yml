@@ -1,0 +1,36 @@
+---
+# ============================================================
+# Validate all supplied Docker role settings
+# ============================================================
+
+- name: Validate Docker role parameters
+  ansible.builtin.assert:
+    that:
+      - host_specifications is defined
+      - host_specifications is mapping
+      - docker_defaults is mapping
+      - docker_defaults.enabled is boolean
+      - docker_host_settings is mapping
+      - (docker_host_settings.keys() | list | difference(['enabled'])) | length == 0
+      - docker_service_enabled is boolean
+    fail_msg: >-
+      Invalid Docker settings. Set host_specifications.docker to a mapping
+      containing only the optional boolean key 'enabled'.
+
+# ============================================================
+# Restrict the initial implementation to Ubuntu 24.04 LTS.
+# This matches the existing server environment and avoids
+# applying Docker repository tasks to an unsupported OS.
+# ============================================================
+
+- name: Validate supported Docker platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] | default('') == 'Linux'
+      - ansible_facts['distribution'] | default('') == 'Ubuntu'
+      - ansible_facts['distribution_version'] | default('') == '24.04'
+      - ansible_facts['pkg_mgr'] | default('') == 'apt'
+    fail_msg: >-
+      This first version of the Docker role supports Ubuntu 24.04 LTS
+      with APT only. Verify gathered host facts before continuing.
+  when: docker_service_enabled

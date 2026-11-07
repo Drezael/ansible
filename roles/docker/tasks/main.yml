@@ -1,0 +1,29 @@
+---
+# ============================================================
+# Load Docker role defaults
+# ============================================================
+
+- name: Load Docker role defaults
+  ansible.builtin.include_vars:
+    file: "{{ roles_dir }}/docker/vars/default.yml"
+    name: docker_defaults
+
+# ============================================================
+# Validate Docker host configuration
+# ============================================================
+
+- name: Validate Docker role configuration
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/docker/validate.yml"
+  vars:
+    docker_host_settings: "{{ (host_specifications | default({})).docker | default({}) }}"
+    docker_service_enabled: >-
+      {{
+        ((host_specifications | default({})).docker | default({})).enabled
+        | default(docker_defaults.enabled)
+      }}
+
+# ============================================================
+# Docker installation and service configuration follow in
+# subsequent steps. No changes are made to the target here.
+# ============================================================
