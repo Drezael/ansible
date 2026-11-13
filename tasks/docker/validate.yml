@@ -18,9 +18,20 @@
       containing only the optional boolean key 'enabled'.
 
 # ============================================================
-# Restrict the initial implementation to Ubuntu 24.04 LTS.
-# This matches the existing server environment and avoids
-# applying Docker repository tasks to an unsupported OS.
+# Display detected operating system information
+# ============================================================
+
+- name: Display detected Docker host platform
+  ansible.builtin.debug:
+    msg:
+      distribution: "{{ ansible_facts['distribution'] | default('unknown') }}"
+      version: "{{ ansible_facts['distribution_version'] | default('unknown') }}"
+      release: "{{ ansible_facts['distribution_release'] | default('unknown') }}"
+      architecture: "{{ ansible_facts['architecture'] | default('unknown') }}"
+      package_manager: "{{ ansible_facts['pkg_mgr'] | default('unknown') }}"
+
+# ============================================================
+# Validate supported operating system
 # ============================================================
 
 - name: Validate supported Docker platform
@@ -28,9 +39,17 @@
     that:
       - ansible_facts['system'] | default('') == 'Linux'
       - ansible_facts['distribution'] | default('') == 'Ubuntu'
-      - ansible_facts['distribution_version'] | default('') == '24.04'
+      - >-
+        (ansible_facts['distribution_version'] | default('') | string)
+        in ['22.04', '24.04', '26.04', '26.10']
       - ansible_facts['pkg_mgr'] | default('') == 'apt'
     fail_msg: >-
-      This first version of the Docker role supports Ubuntu 24.04 LTS
-      with APT only. Verify gathered host facts before continuing.
-  when: docker_service_enabled
+      Unsupported Docker platform.
+      Detected:
+      {{ ansible_facts['distribution'] | default('unknown') }}
+      {{ ansible_facts['distribution_version'] | default('unknown') }}.
+      Supported Ubuntu versions: 22.04, 24.04, 26.04, 26.10.
+    success_msg: >-
+      Docker platform validation successful:
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}.
