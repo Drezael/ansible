@@ -18,3 +18,4 @@ firewall:
 host_roles:
   - server
   - ufw
+  - docker
