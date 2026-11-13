@@ -86,3 +86,11 @@
   vars:
     host_reboot_if_required: "{{ host_specs.reboot_if_required | default(default.reboot_if_required) }}"
     host_reboot_timeout: "{{ host_specs.reboot_timeout | default(default.reboot_timeout) }}"
+
+# ============================================================
+# Expose successful completion to subsequent roles on this host
+# ============================================================
+
+- name: Mark server role as successfully completed
+  ansible.builtin.set_fact:
+    server_role_completed: true

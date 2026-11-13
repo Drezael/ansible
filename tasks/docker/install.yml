@@ -1,0 +1,109 @@
+---
+# ============================================================
+# The server role installs ca-certificates and curl beforehand.
+# No separate Docker prerequisite package list is maintained.
+# ============================================================
+
+- name: Check existing Docker APT keyring directory in check mode
+  ansible.builtin.stat:
+    path: /etc/apt/keyrings
+  register: docker_apt_keyring_before
+  when: ansible_check_mode
+
+- name: Ensure Docker APT keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install official Docker repository signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: docker_apt_key_result
+  when: not ansible_check_mode
+
+- name: Read native APT architecture
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/dpkg
+      - --print-architecture
+  register: docker_apt_architecture
+  changed_when: false
+  check_mode: false
+
+- name: Configure official Docker APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: stable
+      Architectures: {{ docker_apt_architecture.stdout | trim }}
+      Signed-By: /etc/apt/keyrings/docker.asc
+  register: docker_apt_repository_result
+  when: >-
+    not ansible_check_mode
+    or (docker_apt_keyring_before.stat.isdir | default(false))
+
+- name: Update APT cache after Docker repository changes
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  when:
+    - not ansible_check_mode
+    - docker_apt_key_result.changed or docker_apt_repository_result.changed
+
+# ============================================================
+# Only simulate installation if the APT source already exists
+# ============================================================
+
+- name: Check Docker signing key in check mode
+  ansible.builtin.stat:
+    path: /etc/apt/keyrings/docker.asc
+  register: docker_apt_existing_key
+  when: ansible_check_mode
+
+- name: Check Docker repository definition in check mode
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/docker.sources
+  register: docker_apt_existing_repository
+  when: ansible_check_mode
+
+- name: Install Docker Engine, CLI, containerd, Buildx and Compose
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/apt/install.yml"
+  vars:
+    apt_install_packages: "{{ docker_install_packages }}"
+    packages_state: present
+  when: >-
+    not ansible_check_mode
+    or (
+      (docker_apt_existing_key.stat.isreg | default(false))
+      and (docker_apt_existing_repository.stat.isreg | default(false))
+      and not (docker_apt_repository_result.changed | default(false))
+    )
+
+- name: Preview Docker package installation without a ready repository
+  ansible.builtin.debug:
+    msg: >-
+      Would install Docker packages: {{ docker_install_packages | join(', ') }}.
+      The official Docker APT repository must first be configured by a normal run.
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - >-
+      not (
+        (docker_apt_existing_key.stat.isreg | default(false))
+        and (docker_apt_existing_repository.stat.isreg | default(false))
+        and not (docker_apt_repository_result.changed | default(false))
+      )

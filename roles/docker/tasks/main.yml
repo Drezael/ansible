@@ -1,6 +1,38 @@
 ---
 # ============================================================
-# Load Docker role defaults
+# Require successful server role completion in this Ansible run
+# ============================================================
+
+- name: Verify server role completed before Docker role
+  ansible.builtin.assert:
+    that:
+      - server_role_completed | default(false) is sameas true
+    fail_msg: >-
+      The server role has not completed successfully in this Ansible run.
+      Add 'server' before 'docker' in host_specs.host_roles.
+    success_msg: "The server role completed successfully before Docker."
+
+# ============================================================
+# Load the single Docker package list
+# ============================================================
+
+- name: Load package definitions
+  ansible.builtin.include_vars:
+    file: "{{ vars_dir }}/packages.yml"
+    name: package_definitions
+
+# ============================================================
+# Install Docker from the official APT repository
+# ============================================================
+
+- name: Install Docker packages
+  ansible.builtin.include_tasks:
+    file: "{{ tasks_dir }}/docker/install.yml"
+  vars:
+    docker_install_packages: "{{ package_definitions.docker_packages }}"
+
+# ============================================================
+# Load Docker defaults
 # ============================================================
 
 - name: Load Docker role defaults
@@ -9,7 +41,7 @@
     name: docker_defaults
 
 # ============================================================
-# Validate Docker host configuration
+# Validate Docker role configuration after package installation
 # ============================================================
 
 - name: Validate Docker role configuration
@@ -24,6 +56,5 @@
       }}
 
 # ============================================================
-# Docker installation and service configuration follow in
-# subsequent steps. No changes are made to the target here.
+# Daemon and service management will be added separately
 # ============================================================
